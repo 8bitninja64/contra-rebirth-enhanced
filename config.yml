@@ -1,0 +1,8 @@
+object: orig/WKTE/main.dol
+hash: 825fb4ec04335500ca9e172d05b2e593c5ab7dc9
+symbols: config/symbols.txt
+splits: config/splits.txt
+detect_objects: true
+detect_strings: true
+write_asm: true
+quick_analysis: false
