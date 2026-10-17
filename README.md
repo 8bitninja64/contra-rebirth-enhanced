@@ -15,7 +15,9 @@ into a `game` folder and generates the C++ from the executable inside it.
 - Boots through the health screen, Konami logo, save creation, intro, title, character select and
   Stage 1 gameplay (headless Linux test build).
 - A Windows build has been produced but not yet play-tested on Windows.
-- Audio runs but has not been verified by ear. The game draws a pillarboxed 4:3 picture in 16:9 mode.
+- v0.2: audio fixes from Chocobo (no dropped audio periods, DSP-done delivered first, 60 ms jitter
+  buffer; 0 underruns in Stage 1 on the headless test build), game speed 1x-8x, depth/format EFB copies.
+- Audio has not been verified by ear. The game draws a pillarboxed 4:3 picture in 16:9 mode.
 
 See [NOTES.md](NOTES.md) for the technical write-up: binary layout, symbol naming, per-game
 constants and every runtime change.

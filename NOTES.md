@@ -58,6 +58,17 @@ retargeted to this WiiWare title.
 - gx_render.cpp: EFB copies sampled through a larger texture are padded into a texture of the
   sampled size (fixes black screen after the logo). FRAMELOG=1 logs per-frame prims/copies/textures.
 
+## v0.2 (ported from Chocobo's Dungeon 0.7/0.8)
+- Audio: AI DMA periods are queued up to 16 deep instead of dropped beyond 2; the AX resume
+  (DSP done) interrupt uses post_irq_front so each period mixes a fresh frame; host output goes
+  through audio_ring (60 ms prefill, 200 ms cap) pulled by the SDL callback. Headless builds
+  simulate a device and print [audio] underruns/skips with PERF=1.
+- Game speed 1..8, always paced (the unlimited mode re-raised VI as soon as the handler returned
+  and starved the game).
+- EFB copies: copy format decoded correctly (bits 3-6, low bit is the msb), depth copies when the
+  pixel format is Z24 (EFB depth is a texture, resolved with MSAA), format conversion pass.
+  Contra's own padded-copy path for larger texture declarations is kept.
+
 ## Build / run (Linux headless)
     python3 tools/prepare_wad.py Contra_ReBirth_NTSC-U.wad game
     cd src && python3 recomp.py ../game/main.dol ../config/symbols.txt gen 300
