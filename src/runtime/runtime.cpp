@@ -419,7 +419,13 @@ int main(int argc, char** argv) {
     signal(SIGABRT, on_signal);
 #ifndef _WIN32
     signal(SIGALRM, on_signal);
+    // headless test build stops itself (15 s unless TIMEOUT says otherwise); the windowed
+    // SDL build only when TIMEOUT is set
+#ifdef USE_SDL
+    if (getenv("TIMEOUT")) alarm(atoi(getenv("TIMEOUT")));
+#else
     alarm(getenv("TIMEOUT") ? atoi(getenv("TIMEOUT")) : 15);
+#endif
 #endif
 #ifndef _WIN32
     struct sigaction sa = {}; sa.sa_sigaction = on_segv; sa.sa_flags = SA_SIGINFO;

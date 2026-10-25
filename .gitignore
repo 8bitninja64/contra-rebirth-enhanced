@@ -6,6 +6,13 @@
 /nand
 data/
 wad/
+*.app
+*.brstm
+*.brsar
+tmd.bin
+ticket.bin
+/dist/
+*.AppImage
 
 # Generated code (a translation of the game executable) and build output
 src/gen/
