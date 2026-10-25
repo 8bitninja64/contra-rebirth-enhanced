@@ -29,7 +29,30 @@
 static SDL_Window* g_win = nullptr;
 static SDL_GLContext g_glc = nullptr;
 static SDL_AudioDeviceID g_audio = 0;
-static SDL_GameController* g_pad = nullptr;
+static std::vector<SDL_GameController*> g_pads;   // every connected controller; their inputs are merged
+
+// Open joystick `index` as a game controller. Pads SDL has no mapping for (not in its built-in
+// list or gamecontrollerdb.txt) get a generic layout: hat = d-pad, axes 0/1 = left stick,
+// 2/3 = right stick, buttons 0-3 = face buttons, 4/5 = shoulders, 6/7 = back/start.
+static void open_pad(int index) {
+    SDL_JoystickID id = SDL_JoystickGetDeviceInstanceID(index);
+    for (auto* p : g_pads)
+        if (SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(p)) == id) return;   // already open
+    if (!SDL_IsGameController(index)) {
+        char guid[64], map[512];
+        SDL_JoystickGetGUIDString(SDL_JoystickGetDeviceGUID(index), guid, sizeof guid);
+        snprintf(map, sizeof map, "%s,%s,a:b0,b:b1,x:b2,y:b3,leftshoulder:b4,rightshoulder:b5,back:b6,start:b7,"
+                 "leftx:a0,lefty:a1,rightx:a2,righty:a3,dpup:h0.1,dpdown:h0.4,dpleft:h0.8,dpright:h0.2",
+                 guid, SDL_JoystickNameForIndex(index) ? SDL_JoystickNameForIndex(index) : "Gamepad");
+        SDL_GameControllerAddMapping(map);
+        fprintf(stderr, "[input] no mapping for %s (%s): using a generic layout; add it to gamecontrollerdb.txt\n",
+                SDL_JoystickNameForIndex(index), guid);
+    }
+    if (SDL_GameController* p = SDL_GameControllerOpen(index)) {
+        g_pads.push_back(p);
+        fprintf(stderr, "[input] controller: %s\n", SDL_GameControllerName(p));
+    }
+}
 static GLuint g_present_fbo = 0;
 // Presentation runs on its own thread with a second (shared) GL context, so waiting for
 // vsync never blocks the emulated CPU (which must keep servicing 3 ms audio interrupts).
@@ -125,10 +148,15 @@ bool gl_platform_init(int w, int h) {
     want.callback = [](void*, Uint8* stream, int len) { audio_ring_pull((int16_t*)stream, len / 4); };
     g_audio = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
     if (g_audio) SDL_PauseAudioDevice(g_audio, 0);
-    for (int i = 0; i < SDL_NumJoysticks(); i++)
-        if (SDL_IsGameController(i)) { g_pad = SDL_GameControllerOpen(i); break; }
-    if (g_pad) fprintf(stderr, "[input] controller: %s\n", SDL_GameControllerName(g_pad));
-    else fprintf(stderr, "[input] no controller found (keyboard active; controllers can be plugged in any time)\n");
+    // community controller mappings (SDL_GameControllerDB) next to the executable, if present
+    if (char* base = SDL_GetBasePath()) {
+        std::string db = std::string(base) + "gamecontrollerdb.txt";
+        SDL_free(base);
+        int n = SDL_GameControllerAddMappingsFromFile(db.c_str());
+        if (n > 0) fprintf(stderr, "[input] %d controller mappings from %s\n", n, db.c_str());
+    }
+    for (int i = 0; i < SDL_NumJoysticks(); i++) open_pad(i);
+    if (g_pads.empty()) fprintf(stderr, "[input] no controller found (keyboard active; controllers can be plugged in any time)\n");
     (void)w; (void)h;
     return true;
 }
@@ -173,7 +201,7 @@ static void update_input() {
     float rx = 0, ry = 0, lt = 0, rt = 0;
     if (k[SDL_SCANCODE_J]) rx = -1; if (k[SDL_SCANCODE_L]) rx = 1;
     if (k[SDL_SCANCODE_I]) ry = 1; if (k[SDL_SCANCODE_K]) ry = -1;
-    if (g_pad) {
+    for (SDL_GameController* g_pad : g_pads) {
         auto btn = [&](SDL_GameControllerButton x) { return SDL_GameControllerGetButton(g_pad, x) != 0; };
         if (btn(SDL_CONTROLLER_BUTTON_DPAD_UP)) b |= IN_UP;
         if (btn(SDL_CONTROLLER_BUTTON_DPAD_DOWN)) b |= IN_DOWN;
@@ -198,8 +226,8 @@ static void update_input() {
             if (std::fabs(v) < dz) return 0.f;
             return (v > 0 ? v - dz : v + dz) / (1 - dz);
         };
-        lx = axis(SDL_CONTROLLER_AXIS_LEFTX);
-        ly = -axis(SDL_CONTROLLER_AXIS_LEFTY);
+        float sx = axis(SDL_CONTROLLER_AXIS_LEFTX), sy = -axis(SDL_CONTROLLER_AXIS_LEFTY);
+        if (sx || sy) { lx = sx; ly = sy; }
         float px = axis(SDL_CONTROLLER_AXIS_RIGHTX), py = -axis(SDL_CONTROLLER_AXIS_RIGHTY);
         if (px || py) { rx = px; ry = py; }
         lt = std::max(lt, SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_TRIGGERLEFT) / 32767.f);
@@ -250,7 +278,8 @@ bool gl_platform_poll() {
                 if (key >= 0) apply_action(overlay_input(key));
             }
         }
-        if (e.type == SDL_CONTROLLERBUTTONDOWN && g_pad) {
+        SDL_GameController* g_pad = e.type == SDL_CONTROLLERBUTTONDOWN ? SDL_GameControllerFromInstanceID(e.cbutton.which) : nullptr;
+        if (g_pad) {
             int btn = e.cbutton.button;
             bool start = SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_START);
             bool back = SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_BACK);
@@ -266,13 +295,16 @@ bool gl_platform_poll() {
                 if (key >= 0) apply_action(overlay_input(key));
             }
         }
-        if (e.type == SDL_CONTROLLERDEVICEADDED && !g_pad) {
-            g_pad = SDL_GameControllerOpen(e.cdevice.which);
-            if (g_pad) fprintf(stderr, "[input] controller: %s\n", SDL_GameControllerName(g_pad));
-        }
-        if (e.type == SDL_CONTROLLERDEVICEREMOVED && g_pad &&
-            e.cdevice.which == SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(g_pad))) {
-            SDL_GameControllerClose(g_pad); g_pad = nullptr;
+        // hot-plug: JOYDEVICEADDED also covers pads without a mapping (no CONTROLLERDEVICEADDED for those)
+        if (e.type == SDL_JOYDEVICEADDED) open_pad(e.jdevice.which);
+        if (e.type == SDL_CONTROLLERDEVICEREMOVED) {
+            for (size_t i = 0; i < g_pads.size(); i++)
+                if (SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(g_pads[i])) == e.cdevice.which) {
+                    fprintf(stderr, "[input] controller removed: %s\n", SDL_GameControllerName(g_pads[i]));
+                    SDL_GameControllerClose(g_pads[i]);
+                    g_pads.erase(g_pads.begin() + i);
+                    break;
+                }
         }
     }
     update_input();

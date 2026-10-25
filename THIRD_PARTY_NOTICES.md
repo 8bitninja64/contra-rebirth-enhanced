@@ -65,3 +65,9 @@ License 2.0. The full text is in
 
 `src/runtime/gl/GL/glcorearb.h` and `src/runtime/gl/KHR/khrplatform.h` are copyright The Khronos
 Group Inc., released under the MIT license (see the notice at the top of each file).
+
+## SDL_GameControllerDB
+
+`thirdparty/gamecontrollerdb.txt` (copied next to the executable) is from
+https://github.com/mdqinc/SDL_GameControllerDB, released under the zlib license. It gives SDL
+button layouts for controllers it does not know by itself (e.g. the 8BitDo Ultimate 2 over Bluetooth).

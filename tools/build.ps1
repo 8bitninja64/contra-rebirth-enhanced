@@ -69,5 +69,6 @@ $dist = Join-Path $root 'dist'
 New-Item -ItemType Directory -Force $dist | Out-Null
 Copy-Item (Join-Path $root 'src\build-win\contrarebirth.exe') $dist -Force
 Copy-Item (Join-Path $mingw 'bin\SDL2.dll') $dist -Force
+Copy-Item (Join-Path $root 'thirdparty\gamecontrollerdb.txt') $dist -Force   # mappings for pads SDL does not know
 Write-Host "== Done: $dist\contrarebirth.exe"
 Write-Host "   Run it from the repo (it finds ..\game), or put a 'game' folder next to the exe."
