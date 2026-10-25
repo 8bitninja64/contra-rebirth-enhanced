@@ -38,6 +38,8 @@ static void vi_thread() {
         next += std::chrono::nanoseconds((long long)(1e9 / hz));
         precise_sleep_until(next);
         if (clk::now() - next > std::chrono::milliseconds(100)) next = clk::now();   // after a stall
+        extern bool overlay_pauses_game();
+        if (overlay_pauses_game()) { next = clk::now(); continue; }   // F1 menu open: the game stands still
         if (vi_inflight.load()) { g_vi_dropped++; continue; }
         vi_inflight.store(1);
         post_irq([](Ctx* c) {

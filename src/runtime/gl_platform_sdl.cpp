@@ -60,7 +60,7 @@ static GLuint g_present_fbo = 0;
 static SDL_GLContext g_present_ctx = nullptr;
 struct Slot { GLuint tex = 0; int w = 0, h = 0; GLsync fence = nullptr; };
 static Slot g_slots[3];
-static int g_ready = -1, g_showing = -1;
+static int g_ready = -1, g_showing = -1, g_last_shown = -1;
 static std::mutex g_pm;
 static std::condition_variable g_pcv;
 static void present_thread();
@@ -179,7 +179,12 @@ static bool ui_setup() {
     // audio: 32 kHz stereo s16, fed from the AX output
     SDL_AudioSpec want = {}, have = {};
     want.freq = 32000; want.format = AUDIO_S16SYS; want.channels = 2; want.samples = 512;
-    want.callback = [](void*, Uint8* stream, int len) { audio_ring_pull((int16_t*)stream, len / 4); };
+    want.callback = [](void*, Uint8* stream, int len) {
+        int16_t* s = (int16_t*)stream;
+        audio_ring_pull(s, len / 4);
+        const int vol = g_cfg.mute ? 0 : g_cfg.volume;   // F1 > Audio
+        if (vol < 100) for (int i = 0; i < len / 2; i++) s[i] = (int16_t)(s[i] * vol / 100);
+    };
     g_audio = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
     if (g_audio) SDL_PauseAudioDevice(g_audio, 0);
     // community controller mappings (SDL_GameControllerDB) next to the executable, if present
@@ -195,6 +200,7 @@ static bool ui_setup() {
 }
 
 static void handle_event(const SDL_Event& e);
+static void apply_actions();
 static void ui_thread() {
     bool ok = ui_setup();
     {
@@ -209,7 +215,8 @@ static void ui_thread() {
             handle_event(e);
             while (SDL_PollEvent(&e)) handle_event(e);
         }
-        update_input();   // at least every 4 ms, so a new press is seen within the game's next frame
+        update_input();
+        apply_actions();   // at least every 4 ms, so a new press is seen within the game's next frame
     }
 }
 
@@ -223,33 +230,42 @@ void platform_audio_push(const int16_t* lr, int frames) {
     if (g_audio) audio_ring_push(lr, frames);
 }
 
+// Keyboard bindings (F1 > Controls; key_<id> = <SDL key name> in the .ini)
+static const KeyBinding kKeys[] = {
+    {"up", "Up", IN_UP, "Up"},                {"down", "Down", IN_DOWN, "Down"},
+    {"left", "Left", IN_LEFT, "Left"},        {"right", "Right", IN_RIGHT, "Right"},
+    {"jump", "Jump (2)", IN_SOUTH, "X"},      {"shoot", "Shoot (1)", IN_EAST, "Z"},
+    {"a", "A button", IN_WEST, "A"},          {"b", "B button", IN_NORTH, "S"},
+    {"start", "Start (+)", IN_START, "Return"}, {"select", "Select (-)", IN_BACK, "Backspace"},
+    {"home", "Home", IN_GUIDE, "H"},          {"l", "L shoulder", IN_L1, "Q"},
+    {"r", "R shoulder", IN_R1, "W"},          {"zl", "ZL", IN_L2, "1"},
+    {"zr", "ZR", IN_R2, "2"},                 {"turbo", "Fast-forward (hold)", IN_TURBO, "Tab"},
+};
+static const int kKeyCount = (int)(sizeof kKeys / sizeof kKeys[0]);
+static SDL_Scancode g_key_sc[kKeyCount];
+static std::atomic<bool> g_keys_dirty{true};
+const KeyBinding* key_bindings(int* count) { *count = kKeyCount; return kKeys; }
+void key_bindings_changed() { g_keys_dirty = true; }
+static void refresh_key_bindings() {
+    if (!g_keys_dirty.exchange(false)) return;
+    for (int i = 0; i < kKeyCount; i++) {
+        auto it = g_cfg.keys.find(kKeys[i].id);
+        g_key_sc[i] = SDL_GetScancodeFromName(it != g_cfg.keys.end() ? it->second.c_str() : kKeys[i].default_key);
+    }
+}
+
 static void update_input() {
     const Uint8* k = SDL_GetKeyboardState(nullptr);
     uint32_t b = 0;
     float lx = 0, ly = 0;
-    if (k[SDL_SCANCODE_UP] || k[SDL_SCANCODE_DOWN] || k[SDL_SCANCODE_LEFT] || k[SDL_SCANCODE_RIGHT]) b |= IN_KB_ARROWS;
-    if (k[SDL_SCANCODE_UP]) b |= IN_UP;
-    if (k[SDL_SCANCODE_DOWN]) b |= IN_DOWN;
-    if (k[SDL_SCANCODE_LEFT]) b |= IN_LEFT;
-    if (k[SDL_SCANCODE_RIGHT]) b |= IN_RIGHT;
-    if (k[SDL_SCANCODE_I]) b |= IN_ALT_UP;
+    refresh_key_bindings();
+    for (int i = 0; i < kKeyCount; i++)
+        if (g_key_sc[i] != SDL_SCANCODE_UNKNOWN && k[g_key_sc[i]]) b |= kKeys[i].bit;
+    if (b & (IN_UP | IN_DOWN | IN_LEFT | IN_RIGHT)) b |= IN_KB_ARROWS;
+    if (k[SDL_SCANCODE_I]) b |= IN_ALT_UP;      // right-stick stand-in, not rebindable
     if (k[SDL_SCANCODE_K]) b |= IN_ALT_DOWN;
     if (k[SDL_SCANCODE_J]) b |= IN_ALT_LEFT;
     if (k[SDL_SCANCODE_L]) b |= IN_ALT_RIGHT;
-    if (k[SDL_SCANCODE_X]) b |= IN_SOUTH;
-    if (k[SDL_SCANCODE_Z]) b |= IN_EAST;
-    if (k[SDL_SCANCODE_A]) b |= IN_WEST;
-    if (k[SDL_SCANCODE_S]) b |= IN_NORTH;
-    if (k[SDL_SCANCODE_LSHIFT] || k[SDL_SCANCODE_RSHIFT]) b |= IN_L2;
-    if (k[SDL_SCANCODE_C]) b |= IN_R1;
-    if (k[SDL_SCANCODE_RETURN]) b |= IN_START;
-    if (k[SDL_SCANCODE_BACKSPACE]) b |= IN_BACK;
-    if (k[SDL_SCANCODE_H]) b |= IN_GUIDE;
-    if (k[SDL_SCANCODE_Q]) b |= IN_L1;
-    if (k[SDL_SCANCODE_W]) b |= IN_R1;
-    if (k[SDL_SCANCODE_1]) b |= IN_L2;
-    if (k[SDL_SCANCODE_2]) b |= IN_R2;
-    if (k[SDL_SCANCODE_TAB]) b |= IN_TURBO;
     float rx = 0, ry = 0, lt = 0, rt = 0;
     if (k[SDL_SCANCODE_J]) rx = -1; if (k[SDL_SCANCODE_L]) rx = 1;
     if (k[SDL_SCANCODE_I]) ry = 1; if (k[SDL_SCANCODE_K]) ry = -1;
@@ -287,7 +303,28 @@ static void update_input() {
     }
     if (b & IN_L2) lt = 1;
     if (b & IN_R2) rt = 1;
-    if (overlay_open()) { b = 0; lx = ly = rx = ry = lt = rt = 0; }   // the menu owns the controls while open
+    // the menu reads all pads and keys; it owns them while open and until they are released
+    {
+        uint32_t nav = 0;
+        for (SDL_GameController* pad : g_pads) {
+            auto btn = [&](SDL_GameControllerButton x) { return SDL_GameControllerGetButton(pad, x) != 0; };
+            const int ax = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTX), ay = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTY);
+            if (btn(SDL_CONTROLLER_BUTTON_DPAD_UP) || ay < -16000) nav |= OV_PAD_UP;
+            if (btn(SDL_CONTROLLER_BUTTON_DPAD_DOWN) || ay > 16000) nav |= OV_PAD_DOWN;
+            if (btn(SDL_CONTROLLER_BUTTON_DPAD_LEFT) || ax < -16000) nav |= OV_PAD_LEFT;
+            if (btn(SDL_CONTROLLER_BUTTON_DPAD_RIGHT) || ax > 16000) nav |= OV_PAD_RIGHT;
+            const bool sw = g_cfg.swap_ab_xy;
+            if (btn(sw ? SDL_CONTROLLER_BUTTON_B : SDL_CONTROLLER_BUTTON_A)) nav |= OV_PAD_A;
+            if (btn(sw ? SDL_CONTROLLER_BUTTON_A : SDL_CONTROLLER_BUTTON_B)) nav |= OV_PAD_B;
+            if (btn(SDL_CONTROLLER_BUTTON_LEFTSHOULDER)) nav |= OV_PAD_LB;
+            if (btn(SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) nav |= OV_PAD_RB;
+            if (btn(SDL_CONTROLLER_BUTTON_START)) nav |= OV_PAD_START;
+            if (btn(SDL_CONTROLLER_BUTTON_BACK)) nav |= OV_PAD_BACK;
+        }
+        if (b || lx || ly || rx || ry) nav |= 0x80000000u;   // any game control still held
+        overlay_pad(nav);
+    }
+    if (overlay_holds_input()) { b = 0; lx = ly = rx = ry = lt = rt = 0; }
     static const bool no_host_input = getenv("NO_HOST_INPUT") != nullptr;   // scripted tests: AUTOPRESS only
     if (no_host_input) { b = 0; lx = ly = rx = ry = lt = rt = 0; }
     g_host_input.rx = std::max(-1.f, std::min(1.f, rx));
@@ -301,11 +338,10 @@ static void update_input() {
 
 static std::atomic<bool> g_vsync_dirty{false};
 
-static void apply_action(int a) {
-    if (a == OV_FULLSCREEN || a == OV_DISPLAY) apply_display();
-    else if (a == OV_PRESENT) update_present_modes();
-    else if (a == OV_VSYNC) g_vsync_dirty = true;
-    else if (a == OV_QUIT) exit(0);
+static void apply_actions() {
+    const uint32_t a = overlay_take_actions();
+    if (a & OV_ACT_DISPLAY) apply_display();
+    if (a & OV_ACT_QUIT) exit(0);
 }
 
 bool gl_platform_poll() { return true; }   // events are pumped on the UI thread
@@ -313,42 +349,21 @@ bool gl_platform_poll() { return true; }   // events are pumped on the UI thread
 static void handle_event(const SDL_Event& e) {
     {
         if (e.type == SDL_QUIT) exit(0);
+        if (overlay_event(e)) return;   // Esc / F1, key capture, and everything while the menu is open
         if (e.type == SDL_KEYDOWN) {
             SDL_Keycode k = e.key.keysym.sym;
-            if (k == SDLK_F1 || k == SDLK_ESCAPE) {
-                if (overlay_open() && k == SDLK_ESCAPE) overlay_input(OV_KEY_BACK);
-                else overlay_toggle();
-            } else if (k == SDLK_F11 || (k == SDLK_RETURN && (e.key.keysym.mod & KMOD_ALT))) {
+            if (k == SDLK_F11 || (k == SDLK_RETURN && (e.key.keysym.mod & KMOD_ALT))) {
                 g_cfg.fullscreen = !g_cfg.fullscreen;
                 config_save();
-                apply_action(OV_FULLSCREEN);
-            } else if (overlay_open()) {
-                int key = -1;
-                if (k == SDLK_UP) key = OV_KEY_UP;
-                else if (k == SDLK_DOWN) key = OV_KEY_DOWN;
-                else if (k == SDLK_LEFT) key = OV_KEY_LEFT;
-                else if (k == SDLK_RIGHT) key = OV_KEY_RIGHT;
-                else if (k == SDLK_RETURN || k == SDLK_SPACE || k == SDLK_x) key = OV_KEY_OK;
-                else if (k == SDLK_BACKSPACE || k == SDLK_z) key = OV_KEY_BACK;
-                if (key >= 0) apply_action(overlay_input(key));
+                apply_display();
             }
         }
-        SDL_GameController* g_pad = e.type == SDL_CONTROLLERBUTTONDOWN ? SDL_GameControllerFromInstanceID(e.cbutton.which) : nullptr;
-        if (g_pad) {
-            int btn = e.cbutton.button;
-            bool start = SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_START);
-            bool back = SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_BACK);
-            if ((btn == SDL_CONTROLLER_BUTTON_START && back) || (btn == SDL_CONTROLLER_BUTTON_BACK && start)) overlay_toggle();
-            else if (overlay_open()) {
-                int key = -1;
-                if (btn == SDL_CONTROLLER_BUTTON_DPAD_UP) key = OV_KEY_UP;
-                else if (btn == SDL_CONTROLLER_BUTTON_DPAD_DOWN) key = OV_KEY_DOWN;
-                else if (btn == SDL_CONTROLLER_BUTTON_DPAD_LEFT) key = OV_KEY_LEFT;
-                else if (btn == SDL_CONTROLLER_BUTTON_DPAD_RIGHT) key = OV_KEY_RIGHT;
-                else if (btn == SDL_CONTROLLER_BUTTON_A) key = g_cfg.swap_ab_xy ? OV_KEY_BACK : OV_KEY_OK;
-                else if (btn == SDL_CONTROLLER_BUTTON_B) key = g_cfg.swap_ab_xy ? OV_KEY_OK : OV_KEY_BACK;
-                if (key >= 0) apply_action(overlay_input(key));
-            }
+        if (e.type == SDL_CONTROLLERBUTTONDOWN) {   // Back + Start opens / closes the menu
+            SDL_GameController* pad = SDL_GameControllerFromInstanceID(e.cbutton.which);
+            const int btn = e.cbutton.button;
+            if (pad && ((btn == SDL_CONTROLLER_BUTTON_START && SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_BACK)) ||
+                        (btn == SDL_CONTROLLER_BUTTON_BACK && SDL_GameControllerGetButton(pad, SDL_CONTROLLER_BUTTON_START))))
+                overlay_toggle();
         }
         // hot-plug: JOYDEVICEADDED also covers pads without a mapping (no CONTROLLERDEVICEADDED for those)
         if (e.type == SDL_JOYDEVICEADDED) open_pad(e.jdevice.which);
@@ -460,9 +475,13 @@ static void present_thread() {
         GLsync f;
         {
             std::unique_lock<std::mutex> lk(g_pm);
-            g_pcv.wait(lk, [] { return g_ready >= 0; });
-            s = g_ready; g_ready = -1; g_showing = s;
-            f = g_slots[s].fence; g_slots[s].fence = nullptr;
+            g_pcv.wait_for(lk, std::chrono::milliseconds(16), [] { return g_ready >= 0; });
+            if (g_ready >= 0) {
+                s = g_ready; g_ready = -1; g_showing = s; g_last_shown = s;
+                f = g_slots[s].fence; g_slots[s].fence = nullptr;
+            } else if (overlay_open() && g_last_shown >= 0 && g_slots[g_last_shown].tex) {
+                s = g_last_shown; g_showing = s; f = nullptr;   // paused under the F1 menu
+            } else continue;
         }
         if (f) { glWaitSync(f, 0, GL_TIMEOUT_IGNORED); glDeleteSync(f); }
         Slot& sl = g_slots[s];
@@ -499,7 +518,7 @@ static void present_thread() {
         glUniform4f(g_u_rect, (float)dx / ww, (float)dy / wh, (float)dw / ww, (float)dh / wh);
         glBindVertexArray(g_scale_vao);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        overlay_draw(ww, wh);
+        overlay_draw(g_win, g_present_ctx, ww, wh);
         // debug: PRESENT_SHOT=<file.ppm> PRESENT_SHOT_AT=<n> saves the n-th presented window image
         static const char* pshot = getenv("PRESENT_SHOT");
         static long pshot_at = getenv("PRESENT_SHOT_AT") ? atol(getenv("PRESENT_SHOT_AT")) : 600;
@@ -515,7 +534,8 @@ static void present_thread() {
                 fprintf(stderr, "[sdl] window %dx%d saved to %s\n", ww, wh, pshot);
             }
         }
-        if (g_vsync_dirty.exchange(false)) {
+        if (g_vsync_dirty.exchange(false) || g_vsync_dirty_from_menu) {
+            g_vsync_dirty_from_menu = false;
             if (g_cfg.vsync) { if (SDL_GL_SetSwapInterval(-1) != 0) SDL_GL_SetSwapInterval(1); }
             else SDL_GL_SetSwapInterval(0);
         }

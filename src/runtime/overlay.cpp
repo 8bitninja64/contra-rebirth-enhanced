@@ -1,275 +1,526 @@
-// In-game settings menu and frame-rate overlay (windowed builds).
-// Open/close: F1 or Esc on the keyboard, Start+Back together on a controller.
-// UI state is changed on the emulation thread (input); drawing happens on the
-// presentation thread after the game frame is blitted.
+// F1 settings menu, Dear ImGui (tools/fetch_imgui.py). Same design as the Blitz 2003 and
+// Tenchu Z ports: a section list on the left, the section's options on the right, button
+// hints with Resume / Quit game in the footer. Everything applies at once and is saved
+// to the .ini; options that need a restart are grouped under "Applied on the next start".
+//
+// Threads: the UI thread (gl_platform_sdl.cpp) feeds SDL events and pad state; the present
+// thread draws. g_mx serializes the two. Open/close: Esc or F1, Back+Start on a controller.
+// The game stands still while the menu is open (no retraces, no audio periods).
 #if defined(_WIN32) || defined(USE_SDL)
 #include "game.h"
-#ifdef _WIN32
-#include "glad.h"
-#else
-#define GL_GLEXT_PROTOTYPES
-#include <GL/gl.h>
-#include <GL/glext.h>
-#endif
 #include "overlay.h"
 #include "config.h"
-#include "font_atlas.h"
 #include "enhancements.h"
+#include "imgui.h"
+#include "backends/imgui_impl_sdl2.h"
+#include "backends/imgui_impl_opengl3.h"
+#include <SDL2/SDL.h>
+#include <atomic>
 #include <mutex>
 #include <string>
 #include <vector>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <cstdlib>
-#include <algorithm>
 
-static std::mutex g_ui_mx;
-static bool g_open = false;
-static int g_sel = 0;
-static bool g_quit_armed = false;
+bool g_vsync_dirty_from_menu = false;
 
-struct Item {
-    const char* label;
-    std::vector<const char*> opts;
-    const char* note;
-};
-static const std::vector<Item>& items() {
-    static std::vector<Item> v = {
-        {"Resolution", {"1x  640x528 (Wii)", "2x  1280x1056", "3x  1920x1584", "4x  2560x2112"}, nullptr},
-        {"Aspect ratio", {"4:3", "16:9 widescreen"}, "The game's own layout switches after a restart."},
-        {"VSync", {"Off", "On"}, nullptr},
-        {"Fullscreen", {"Off", "On"}, nullptr},
-        {"Controls", {"Wii Remote sideways", "Wii Remote + Nunchuk", "Classic Controller"}, "Choose the same grip in the game's grip menu."},
-        {"Swap A/B and X/Y", {"Off", "On"}, "Gamepad: use the face buttons by position (Nintendo style)."},
-        {"Frame rate display", {"Off", "On"}, nullptr},
-        {"Anti-aliasing", {"Off", "2x MSAA", "4x MSAA", "8x MSAA"}, "Smooths jagged edges of 3D models."},
-        {"Texture smoothing", {"Off (original)", "On (trilinear)"}, "Mipmaps: removes shimmer on distant textures."},
-        {"Game speed", {"Normal", "2x", "3x", "4x", "5x", "6x", "7x", "8x"}, "Fast-forward. Hold Tab or click the right stick for a burst."},
-        {"Anisotropic filter", {"Off", "2x", "4x", "8x", "16x"}, "Sharper floors and walls seen at an angle."},
-        {"Fullscreen mode", {"Borderless", "Exclusive"}, "Exclusive switches the display to the output resolution."},
-        {"Output resolution", {"Auto", "1280x720", "1920x1080", "2560x1440", "3840x2160", "Native (desktop)"},
-         "Window size / exclusive mode. Not the internal rendering resolution."},
-        {"Scaling", {"Fit (keep aspect)", "Integer", "Stretch"}, "Integer: whole multiples of the game's 240 lines."},
-        {"Filter", {"Smooth", "Sharp", "Nearest"}, "Sharp: crisp pixels without uneven-pixel shimmer."},
+namespace {
+std::recursive_mutex g_mx;
+std::atomic<bool> g_open{false};
+std::atomic<bool> g_hold{false};        // closed, but the input that closed it is still held
+std::atomic<uint32_t> g_actions{0};
+std::atomic<uint32_t> g_pad_held{0};
+std::atomic<int> g_capture{-1};          // key binding waiting for a key (-1 none)
+bool g_init = false;
+uint32_t g_pad_prev = 0, g_pad_pressed = 0;
+
+enum Section { kDisplay, kGraphics, kAudio, kControls, kGameplay, kCheats, kAbout, kSectionCount };
+const char* kSectionNames[kSectionCount] = {"Display", "Graphics", "Audio", "Controls", "Gameplay", "Cheats", "About"};
+int g_section = 0;
+enum class Focus { None, Sections, Content };
+Focus g_focus = Focus::Sections;
+
+// Contra colours: charcoal panels, crimson and steel accents, gold highlights.
+const ImVec4 kCrimson(0.72f, 0.09f, 0.12f, 1.0f);
+const ImVec4 kSteel(0.33f, 0.40f, 0.52f, 1.0f);
+const ImVec4 kGold(0.95f, 0.76f, 0.30f, 1.0f);
+const ImVec4 kGreen(0.30f, 0.85f, 0.40f, 1.0f);
+ImFont* g_body = nullptr;
+ImFont* g_title = nullptr;
+constexpr float kFontPx = 40.0f;   // rasterized large, scaled down to the window
+
+void set_open(bool open) {
+    if (g_open.exchange(open) == open) return;
+    g_focus = Focus::Sections;
+    g_capture = -1;
+    g_hold = true;   // the game gets the controls back once everything is released
+    std::lock_guard<std::recursive_mutex> lk(g_mx);
+    if (g_init) { ImGui::GetIO().ClearInputKeys(); ImGui::GetIO().ClearInputMouse(); }
+}
+
+void apply_style() {
+    ImGuiStyle& s = ImGui::GetStyle();
+    s.WindowRounding = 10; s.ChildRounding = 8; s.FrameRounding = 6; s.GrabRounding = 6; s.PopupRounding = 6;
+    s.WindowBorderSize = 0; s.FrameBorderSize = 0;
+    s.WindowPadding = ImVec2(18, 16); s.FramePadding = ImVec2(10, 6); s.ItemSpacing = ImVec2(10, 9);
+    s.ScrollbarSize = 14;
+    ImVec4* c = s.Colors;
+    c[ImGuiCol_WindowBg] = ImVec4(0.06f, 0.06f, 0.07f, 0.96f);
+    c[ImGuiCol_ChildBg] = ImVec4(0.10f, 0.10f, 0.12f, 1.0f);
+    c[ImGuiCol_PopupBg] = ImVec4(0.09f, 0.09f, 0.11f, 0.98f);
+    c[ImGuiCol_Text] = ImVec4(0.95f, 0.94f, 0.92f, 1.0f);
+    c[ImGuiCol_TextDisabled] = ImVec4(0.58f, 0.58f, 0.62f, 1.0f);
+    c[ImGuiCol_FrameBg] = ImVec4(0.17f, 0.17f, 0.20f, 1.0f);
+    c[ImGuiCol_FrameBgHovered] = ImVec4(0.24f, 0.24f, 0.28f, 1.0f);
+    c[ImGuiCol_FrameBgActive] = ImVec4(0.30f, 0.30f, 0.35f, 1.0f);
+    c[ImGuiCol_CheckMark] = kGold;
+    c[ImGuiCol_SliderGrab] = kCrimson;
+    c[ImGuiCol_SliderGrabActive] = ImVec4(0.92f, 0.20f, 0.22f, 1.0f);
+    c[ImGuiCol_Button] = ImVec4(0.20f, 0.20f, 0.24f, 1.0f);
+    c[ImGuiCol_ButtonHovered] = kSteel;
+    c[ImGuiCol_ButtonActive] = kCrimson;
+    c[ImGuiCol_Header] = ImVec4(0.22f, 0.22f, 0.27f, 1.0f);
+    c[ImGuiCol_HeaderHovered] = kSteel;
+    c[ImGuiCol_HeaderActive] = kCrimson;
+    c[ImGuiCol_Separator] = ImVec4(0.30f, 0.30f, 0.36f, 1.0f);
+    c[ImGuiCol_NavHighlight] = kGold;
+    c[ImGuiCol_TableRowBg] = ImVec4(0, 0, 0, 0);
+    c[ImGuiCol_TableRowBgAlt] = ImVec4(1, 1, 1, 0.03f);
+}
+
+// The system UI font (nothing to ship), else ImGui's built-in one.
+void load_fonts() {
+    ImGuiIO& io = ImGui::GetIO();
+    auto load = [&](std::initializer_list<const char*> paths, float px) -> ImFont* {
+        for (const char* p : paths)
+            if (std::filesystem::exists(p))
+                if (ImFont* f = io.Fonts->AddFontFromFileTTF(p, px)) return f;
+        return nullptr;
     };
-    static bool built = false;
-    if (!built) {   // one On/Off row per enhancement (cheats included), then the two actions
-        built = true;
-        for (int i = 0; i < enh_count(); i++) v.push_back({enh_get(i)->name, {"Off", "On"}, enh_get(i)->description});
-        v.push_back({"Close menu", {}, nullptr});
-        v.push_back({"Quit game", {}, nullptr});
-    }
-    return v;
+#ifdef _WIN32
+    g_body = load({"C:/Windows/Fonts/segoeui.ttf"}, kFontPx);
+    g_title = load({"C:/Windows/Fonts/seguibl.ttf", "C:/Windows/Fonts/segoeuib.ttf"}, kFontPx * 1.4f);
+#else
+    g_body = load({"/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+                   "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/TTF/DejaVuSans.ttf"}, kFontPx);
+    g_title = load({"/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf", "/usr/share/fonts/noto/NotoSans-Bold.ttf",
+                    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf"},
+                   kFontPx * 1.4f);
+#endif
+    if (!g_body) { ImFontConfig cfg; cfg.SizePixels = 13; g_body = io.Fonts->AddFontDefault(&cfg); }
+    if (!g_title) g_title = g_body;
+    io.FontDefault = g_body;
 }
-static const int kEnhFirst = 15;   // index of the first enhancement row
-static int get_value(int i) {
-    if (i >= kEnhFirst && i < kEnhFirst + enh_count()) return enh_enabled(enh_get(i - kEnhFirst)->id) ? 1 : 0;
-    switch (i) {
-        case 0: return g_cfg.resolution_scale - 1;
-        case 1: return g_cfg.widescreen ? 1 : 0;
-        case 2: return g_cfg.vsync ? 1 : 0;
-        case 3: return g_cfg.fullscreen ? 1 : 0;
-        case 4: return g_cfg.controls == "nunchuk" ? 1 : g_cfg.controls == "classic" ? 2 : 0;
-        case 5: return g_cfg.swap_ab_xy ? 1 : 0;
-        case 6: return g_cfg.show_perf ? 1 : 0;
-        case 7: return g_cfg.msaa >= 8 ? 3 : g_cfg.msaa >= 4 ? 2 : g_cfg.msaa >= 2 ? 1 : 0;
-        case 8: return g_cfg.smooth_textures ? 1 : 0;
-        case 9: return std::max(1, std::min(8, g_cfg.speed)) - 1;
-        case 10: return g_cfg.anisotropy >= 16 ? 4 : g_cfg.anisotropy >= 8 ? 3 : g_cfg.anisotropy >= 4 ? 2 : g_cfg.anisotropy >= 2 ? 1 : 0;
-        case 11: return g_cfg.fullscreen_mode == "exclusive" ? 1 : 0;
-        case 12: {
-            const auto& o = items()[12].opts;
-            if (g_cfg.resolution == "native") return 5;
-            for (int k = 1; k < 5; k++) if (g_cfg.resolution == o[k]) return k;
-            return 0;   // auto, or a custom size from the .ini (shown as Auto until changed here)
+
+// Pads drive the menu as keyboard navigation.
+void feed_navigation() {
+    static uint32_t previous = 0;
+    const uint32_t held = g_pad_held.load();
+    ImGuiIO& io = ImGui::GetIO();
+    const uint32_t changed = held ^ previous;
+    auto key = [&](uint32_t bit, ImGuiKey k) { if (changed & bit) io.AddKeyEvent(k, (held & bit) != 0); };
+    key(OV_PAD_UP, ImGuiKey_UpArrow); key(OV_PAD_DOWN, ImGuiKey_DownArrow);
+    key(OV_PAD_LEFT, ImGuiKey_LeftArrow); key(OV_PAD_RIGHT, ImGuiKey_RightArrow);
+    key(OV_PAD_A, ImGuiKey_Space);   // activate / toggle
+    key(OV_PAD_B, ImGuiKey_Escape);  // cancel
+    g_pad_pressed = held & ~previous;
+    previous = held;
+}
+
+void focus_first_option() {
+    if (g_focus != Focus::Content) return;
+    ImGui::SetKeyboardFocusHere();
+    g_focus = Focus::None;
+}
+void help(const char* text) {
+    ImGui::Indent();
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("%s", text);
+    ImGui::PopStyleColor();
+    ImGui::Unindent();
+}
+void next_start_group() { ImGui::Spacing(); ImGui::Separator(); ImGui::TextDisabled("Applied on the next start:"); }
+
+bool combo(const char* label, int* value, const char* const* names, int n) {
+    bool changed = false;
+    if (ImGui::BeginCombo(label, names[*value])) {
+        for (int i = 0; i < n; i++)
+            if (ImGui::Selectable(names[i], *value == i)) { *value = i; changed = true; }
+        ImGui::EndCombo();
+    }
+    return changed;
+}
+
+// ---------------------------------------------------------------- pages
+bool draw_display() {
+    bool changed = false;
+    focus_first_option();
+    bool fs = g_cfg.fullscreen;
+    if (ImGui::Checkbox("Fullscreen (F11 / Alt+Enter)", &fs)) { g_cfg.fullscreen = fs; g_actions |= OV_ACT_DISPLAY; changed = true; }
+    {
+        static const char* names[] = {"Borderless (desktop resolution)", "Exclusive (output resolution)"};
+        int v = g_cfg.fullscreen_mode == "exclusive" ? 1 : 0;
+        if (combo("Fullscreen mode", &v, names, 2)) { g_cfg.fullscreen_mode = v ? "exclusive" : "borderless"; g_actions |= OV_ACT_DISPLAY; changed = true; }
+    }
+    {
+        static const char* names[] = {"Auto (fits the desktop)", "1280x720", "1920x1080", "2560x1440", "3840x2160", "Native (desktop)"};
+        static const char* values[] = {"auto", "1280x720", "1920x1080", "2560x1440", "3840x2160", "native"};
+        int v = 0;
+        for (int i = 0; i < 6; i++) if (g_cfg.resolution == values[i]) v = i;
+        if (combo("Output resolution", &v, names, 6)) { g_cfg.resolution = values[v]; g_actions |= OV_ACT_DISPLAY; changed = true; }
+        help("Window size, and the display mode in exclusive fullscreen. Custom sizes: resolution = WxH in the .ini.");
+    }
+    {
+        static const char* names[] = {"Fit (keep aspect)", "Integer (whole multiples of 240 lines)", "Stretch"};
+        static const char* values[] = {"fit", "integer", "stretch"};
+        int v = g_cfg.scaling == "integer" ? 1 : g_cfg.scaling == "stretch" ? 2 : 0;
+        if (combo("Scaling", &v, names, 3)) { g_cfg.scaling = values[v]; g_actions |= OV_ACT_DISPLAY; changed = true; }
+    }
+    {
+        static const char* names[] = {"Smooth", "Sharp (crisp pixels, no shimmer)", "Nearest (raw pixels)"};
+        static const char* values[] = {"smooth", "sharp", "nearest"};
+        int v = g_cfg.filter == "sharp" ? 1 : g_cfg.filter == "nearest" ? 2 : 0;
+        if (combo("Filter", &v, names, 3)) { g_cfg.filter = values[v]; g_actions |= OV_ACT_DISPLAY; changed = true; }
+    }
+    if (ImGui::Checkbox("VSync", &g_cfg.vsync)) { g_vsync_dirty_from_menu = true; changed = true; }
+    changed |= ImGui::Checkbox("Show FPS counter", &g_cfg.show_perf);
+    next_start_group();
+    {
+        static const char* names[] = {"4:3 (original)", "16:9 widescreen"};
+        int v = g_cfg.widescreen ? 1 : 0;
+        if (combo("Aspect ratio", &v, names, 2)) { g_cfg.widescreen = v; changed = true; }
+        help("The game lays out its menus for this. True widescreen (Graphics) needs 16:9.");
+    }
+    return changed;
+}
+
+bool enh_checkbox(const char* id, const char* label) {
+    bool on = enh_enabled(id);
+    if (ImGui::Checkbox(label, &on)) { enh_set_enabled(id, on); return true; }
+    return false;
+}
+
+bool draw_graphics() {
+    bool changed = false;
+    focus_first_option();
+    enh_checkbox("widescreen", "True widescreen");
+    help(g_cfg.widescreen ? "Shows more of the level at the sides instead of black bars."
+                          : "Needs Aspect ratio 16:9 (Display), applied on the next start.");
+    {
+        static const char* names[] = {"1x  640x528 (original)", "2x  1280x1056", "3x  1920x1584", "4x  2560x2112"};
+        int v = std::max(0, std::min(3, g_cfg.resolution_scale - 1));
+        if (combo("Internal resolution", &v, names, 4)) { g_cfg.resolution_scale = v + 1; changed = true; }
+    }
+    {
+        static const char* names[] = {"Off", "2x MSAA", "4x MSAA", "8x MSAA"};
+        int v = g_cfg.msaa >= 8 ? 3 : g_cfg.msaa >= 4 ? 2 : g_cfg.msaa >= 2 ? 1 : 0;
+        if (combo("Anti-aliasing", &v, names, 4)) { g_cfg.msaa = v ? 1 << v : 1; changed = true; }
+    }
+    {
+        static const char* names[] = {"Off", "2x", "4x", "8x", "16x"};
+        int v = g_cfg.anisotropy >= 16 ? 4 : g_cfg.anisotropy >= 8 ? 3 : g_cfg.anisotropy >= 4 ? 2 : g_cfg.anisotropy >= 2 ? 1 : 0;
+        if (combo("Anisotropic filter", &v, names, 5)) { g_cfg.anisotropy = v ? 1 << v : 1; changed = true; }
+    }
+    changed |= ImGui::Checkbox("Texture smoothing (trilinear mipmaps)", &g_cfg.smooth_textures);
+    return changed;
+}
+
+bool draw_audio() {
+    bool changed = false;
+    focus_first_option();
+    changed |= ImGui::SliderInt("Volume", &g_cfg.volume, 0, 100, "%d%%");
+    changed |= ImGui::Checkbox("Mute", &g_cfg.mute);
+    return changed;
+}
+
+bool draw_controls() {
+    bool changed = false;
+    focus_first_option();
+    {
+        static const char* names[] = {"Wii Remote sideways", "Wii Remote + Nunchuk", "Classic Controller"};
+        static const char* values[] = {"sideways", "nunchuk", "classic"};
+        int v = g_cfg.controls == "nunchuk" ? 1 : g_cfg.controls == "classic" ? 2 : 0;
+        if (combo("Controller type", &v, names, 3)) { g_cfg.controls = values[v]; changed = true; }
+        help("Choose the same grip in the game's own menu.");
+    }
+    changed |= ImGui::Checkbox("Swap A/B and X/Y (Nintendo button positions)", &g_cfg.swap_ab_xy);
+    ImGui::Spacing();
+    ImGui::TextDisabled("Controllers:");
+    int pads = 0;
+    for (int i = 0; i < SDL_NumJoysticks(); i++)
+        if (SDL_IsGameController(i)) { ImGui::BulletText("%s", SDL_GameControllerNameForIndex(i)); pads++; }
+    if (!pads) ImGui::BulletText("none connected (plug one in at any time)");
+    ImGui::Spacing();
+    ImGui::TextDisabled("Keyboard:");
+    int n = 0;
+    const KeyBinding* kb = key_bindings(&n);
+    if (ImGui::BeginTable("##keys", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+        for (int i = 0; i < n; i++) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(kb[i].label);
+            ImGui::TableNextColumn();
+            auto it = g_cfg.keys.find(kb[i].id);
+            const std::string key = it != g_cfg.keys.end() ? it->second : kb[i].default_key;
+            if (g_capture == i) ImGui::TextColored(kGold, "press a key (Esc cancels)");
+            else ImGui::TextUnformatted(key.c_str());
+            ImGui::TableNextColumn();
+            ImGui::PushID(i);
+            if (ImGui::SmallButton("Change")) g_capture = i;
+            ImGui::PopID();
         }
-        case 13: return g_cfg.scaling == "integer" ? 1 : g_cfg.scaling == "stretch" ? 2 : 0;
-        case 14: return g_cfg.filter == "sharp" ? 1 : g_cfg.filter == "nearest" ? 2 : 0;
+        ImGui::EndTable();
     }
-    return 0;
+    if (ImGui::Button("Reset keyboard to defaults")) { g_cfg.keys.clear(); key_bindings_changed(); changed = true; }
+    help("Arrows move, X jumps, Z shoots by default (Wii Remote held sideways). Tab: fast-forward.");
+    return changed;
 }
-static void set_value(int i, int v) {
-    if (i >= kEnhFirst && i < kEnhFirst + enh_count()) { enh_set_enabled(enh_get(i - kEnhFirst)->id, v != 0); return; }
-    switch (i) {
-        case 0: g_cfg.resolution_scale = v + 1; break;
-        case 1: g_cfg.widescreen = v; break;
-        case 2: g_cfg.vsync = v; break;
-        case 3: g_cfg.fullscreen = v; break;
-        case 4: g_cfg.controls = v == 2 ? "classic" : v ? "nunchuk" : "sideways"; break;
-        case 5: g_cfg.swap_ab_xy = v; break;
-        case 6: g_cfg.show_perf = v; break;
-        case 7: g_cfg.msaa = v ? 1 << v : 1; break;
-        case 8: g_cfg.smooth_textures = v; break;
-        case 9: g_cfg.speed = v + 1; break;
-        case 10: g_cfg.anisotropy = v ? 1 << v : 1; break;
-        case 11: g_cfg.fullscreen_mode = v ? "exclusive" : "borderless"; break;
-        case 12: g_cfg.resolution = v == 0 ? "auto" : v == 5 ? "native" : items()[12].opts[v]; break;
-        case 13: g_cfg.scaling = v == 1 ? "integer" : v == 2 ? "stretch" : "fit"; break;
-        case 14: g_cfg.filter = v == 1 ? "sharp" : v == 2 ? "nearest" : "smooth"; break;
+
+bool draw_gameplay() {
+    bool changed = false;
+    focus_first_option();
+    {
+        static const char* names[] = {"Normal", "2x", "3x", "4x", "5x", "6x", "7x", "8x"};
+        int v = std::max(0, std::min(7, g_cfg.speed - 1));
+        if (combo("Game speed", &v, names, 8)) { g_cfg.speed = v + 1; changed = true; }
+        help("Fast-forward. Hold Tab (keyboard) or click the right stick for a burst.");
     }
-    config_save();
+    enh_checkbox("skip_strap_screen", "Skip the wrist-strap screen");
+    enh_checkbox("frame_stats", "Frame statistics in the log (diagnostics)");
+    return changed;
 }
+
+bool draw_cheats() {
+    bool changed = false;
+    focus_first_option();
+    enh_checkbox("cheat_lives", "Infinite lives");
+    help("Lives never drop below 3.");
+    enh_checkbox("cheat_invincible", "Invincibility");
+    help("Enemies and shots cannot kill you. Pits still can: use with infinite lives.");
+    {
+        static const char* names[] = {"Off (what you pick up)", "Spread (S)", "Laser (L)", "Homing (H)"};
+        static const char* ids[] = {nullptr, "cheat_spread", "cheat_laser", "cheat_homing"};
+        int v = 0;
+        for (int i = 1; i < 4; i++) if (enh_enabled(ids[i])) v = i;
+        if (combo("Always this weapon", &v, names, 4))
+            for (int i = 1; i < 4; i++) enh_set_enabled(ids[i], i == v);
+    }
+    enh_checkbox("cheat_stage", "Stage select");
+    {
+        static const char* names[] = {"Stage 1", "Stage 2", "Stage 3", "Stage 4", "Stage 5"};
+        int v = std::max(0, std::min(4, g_cfg.start_stage - 1));
+        if (combo("Start at", &v, names, 5)) { g_cfg.start_stage = v + 1; changed = true; }
+        help("A new game (from the title screen) starts at this stage.");
+    }
+    ImGui::Spacing();
+    if (ImGui::Button("All cheats off")) {
+        for (const char* id : {"cheat_lives", "cheat_invincible", "cheat_spread", "cheat_laser", "cheat_homing", "cheat_stage"})
+            enh_set_enabled(id, false);
+    }
+    return changed;
+}
+
+void draw_about() {
+    ImGui::TextUnformatted(GAME_NAME " Enhanced - native PC port of the WiiWare game (WKTE)");
+    ImGui::TextDisabled("Static recompilation by darkuni; enhancements: github.com/8bitninja64/contra-rebirth-enhanced");
+    ImGui::Spacing();
+    ImGui::TextWrapped("Contra ReBirth is (c) Konami. This program contains no Konami code or data: it runs your own copy of the game.");
+    ImGui::Spacing();
+    ImGui::TextDisabled("Dear ImGui (MIT), SDL2 (zlib), SDL_GameControllerDB (zlib), Droid Sans fonts (Apache 2.0).");
+}
+
+void hint(const char* button, ImVec4 color, const char* action) {
+    ImGui::TextColored(color, "%s", button);
+    ImGui::SameLine(0, 4);
+    ImGui::TextDisabled("%s", action);
+    ImGui::SameLine(0, 22);
+}
+
+bool g_popup = false;
+void draw_menu() {
+    ImGuiIO& io = ImGui::GetIO();
+    if (g_pad_pressed) ImGui::SetNavCursorVisible(true);
+    if (g_pad_pressed & (OV_PAD_LB | OV_PAD_RB)) {
+        g_section = (g_section + ((g_pad_pressed & OV_PAD_LB) ? kSectionCount - 1 : 1)) % kSectionCount;
+        g_focus = Focus::Sections;
+    }
+    const bool back = (g_pad_pressed & OV_PAD_B) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false);
+    if (back && !g_popup && !ImGui::IsAnyItemActive() && g_capture < 0) g_focus = Focus::Sections;
+
+    const ImVec2 size(io.DisplaySize.x * 0.72f, io.DisplaySize.y * 0.80f);
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+    if (!ImGui::Begin("##settings", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::End();
+        return;
+    }
+    // Header: title over a crimson/steel stripe.
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 o = ImGui::GetWindowPos();
+    const float stripe = ImGui::GetFontSize() / 3.0f;
+    dl->AddRectFilled(o, ImVec2(o.x + size.x, o.y + stripe), ImGui::GetColorU32(kCrimson), 10, ImDrawFlags_RoundCornersTop);
+    dl->AddRectFilled(ImVec2(o.x, o.y + stripe), ImVec2(o.x + size.x, o.y + stripe * 1.6f), ImGui::GetColorU32(kSteel));
+    ImGui::Dummy(ImVec2(0, stripe));
+    ImGui::PushFont(g_title);
+    ImGui::TextColored(ImVec4(1, 1, 1, 1), "CONTRA REBIRTH ENHANCED");
+    ImGui::PopFont();
+    ImGui::SameLine();
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + ImGui::GetTextLineHeight() * 0.35f);
+    ImGui::TextDisabled("SETTINGS  -  game paused");
+    ImGui::Spacing();
+
+    const float footer = ImGui::GetFrameHeightWithSpacing() * 1.6f;
+    bool changed = false;
+    ImGui::BeginChild("##sections", ImVec2(size.x * 0.22f, -footer), ImGuiChildFlags_NavFlattened);
+    ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0.1f, 0.5f));
+    for (int i = 0; i < kSectionCount; ++i) {
+        const bool sel = g_section == i;
+        if (sel) ImGui::PushStyleColor(ImGuiCol_Header, kCrimson);
+        if (sel && g_focus == Focus::Sections) { ImGui::SetKeyboardFocusHere(); g_focus = Focus::None; }
+        if (ImGui::Selectable(kSectionNames[i], sel, 0, ImVec2(0, ImGui::GetTextLineHeight() * 1.8f))) {
+            g_section = i;
+            g_focus = Focus::Content;
+        }
+        if (sel) ImGui::PopStyleColor();
+    }
+    ImGui::PopStyleVar();
+    ImGui::EndChild();
+    ImGui::SameLine();
+    ImGui::BeginChild("##content", ImVec2(0, -footer), ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened);
+    ImGui::PushFont(g_title);
+    ImGui::TextColored(kGold, "%s", kSectionNames[g_section]);
+    ImGui::PopFont();
+    ImGui::Separator();
+    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.45f);
+    switch (g_section) {
+        case kDisplay: changed |= draw_display(); break;
+        case kGraphics: changed |= draw_graphics(); break;
+        case kAudio: changed |= draw_audio(); break;
+        case kControls: changed |= draw_controls(); break;
+        case kGameplay: changed |= draw_gameplay(); break;
+        case kCheats: changed |= draw_cheats(); break;
+        case kAbout: draw_about(); break;
+    }
+    ImGui::PopItemWidth();
+    if (g_focus == Focus::Content) g_focus = Focus::None;
+    ImGui::EndChild();
+    // Footer: controller hints, Resume and Quit game.
+    ImGui::Spacing();
+    hint("A", kGreen, "select");
+    hint("B", kCrimson, "back");
+    hint("LB / RB", kSteel, "section");
+    hint("Esc / F1 / Back+Start", kGold, "close");
+    const ImGuiStyle& st = ImGui::GetStyle();
+    auto width = [&](const char* t) { return ImGui::CalcTextSize(t).x + st.FramePadding.x * 2; };
+    ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - width("Resume") - width("Quit game") - st.ItemSpacing.x);
+    if (ImGui::Button("Resume")) set_open(false);
+    ImGui::SameLine();
+    if (ImGui::Button("Quit game")) ImGui::OpenPopup("Quit?");
+    if (ImGui::BeginPopupModal("Quit?", nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
+        ImGui::Text("Quit Contra ReBirth?");
+        ImGui::TextDisabled("Progress since the game last saved is lost.");
+        ImGui::Spacing();
+        if (ImGui::Button("Quit", ImVec2(width("Cancel") * 1.6f, 0))) g_actions |= OV_ACT_QUIT;
+        ImGui::SameLine();
+        ImGui::SetItemDefaultFocus();
+        if (ImGui::Button("Cancel", ImVec2(width("Cancel") * 1.6f, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    g_popup = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+    ImGui::End();
+    if (changed) config_save();
+}
+
+void draw_fps() {
+    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.45f);
+    const ImGuiWindowFlags f = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                               ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs;
+    if (ImGui::Begin("##fps", nullptr, f)) ImGui::TextUnformatted(g_perf_text);
+    ImGui::End();
+}
+}  // namespace
 
 bool overlay_open() { return g_open; }
-void overlay_toggle() {
-    std::lock_guard<std::mutex> g(g_ui_mx);
-    g_open = !g_open;
-    g_quit_armed = false;
+void overlay_toggle() { set_open(!g_open); }
+bool overlay_pauses_game() { return g_open; }
+bool overlay_holds_input() { return g_open || g_hold; }
+uint32_t overlay_take_actions() { return g_actions.exchange(0); }
+
+void overlay_pad(uint32_t held) {
+    if (!g_open && held == 0) g_hold = false;
+    g_pad_held = g_open ? held : 0;
 }
 
-// returns an action the platform layer must carry out
-int overlay_input(int key) {
-    std::lock_guard<std::mutex> g(g_ui_mx);
-    if (!g_open) return OV_NONE;
-    const auto& it = items();
-    int n = (int)it.size();
-    if (key == OV_KEY_UP) { g_sel = (g_sel + n - 1) % n; g_quit_armed = false; }
-    else if (key == OV_KEY_DOWN) { g_sel = (g_sel + 1) % n; g_quit_armed = false; }
-    else if (key == OV_KEY_BACK) { g_open = false; }
-    else if (key == OV_KEY_LEFT || key == OV_KEY_RIGHT || key == OV_KEY_OK) {
-        const Item& m = it[g_sel];
-        if (m.opts.empty()) {
-            if (key != OV_KEY_OK) return OV_NONE;
-            if (g_sel == n - 2) { g_open = false; return OV_NONE; }
-            if (g_sel == n - 1) {
-                if (g_quit_armed) return OV_QUIT;
-                g_quit_armed = true;
+bool overlay_event(const SDL_Event& e) {
+    if (e.type == SDL_KEYDOWN && !e.key.repeat) {
+        const SDL_Keycode k = e.key.keysym.sym;
+        if (g_capture >= 0) {   // rebinding: the next key
+            int n = 0;
+            const KeyBinding* kb = key_bindings(&n);
+            const int i = g_capture.exchange(-1);
+            if (k != SDLK_ESCAPE && i >= 0 && i < n) {
+                g_cfg.keys[kb[i].id] = SDL_GetScancodeName(e.key.keysym.scancode);
+                key_bindings_changed();
+                config_save();
             }
-            return OV_NONE;
+            return true;
         }
-        int cnt = (int)m.opts.size(), v = get_value(g_sel);
-        v = key == OV_KEY_LEFT ? (v + cnt - 1) % cnt : (v + 1) % cnt;
-        set_value(g_sel, v);
-        if (g_sel == 3) return OV_FULLSCREEN;
-        if (g_sel == 2) return OV_VSYNC;
-        if (g_sel == 11 || g_sel == 12) return OV_DISPLAY;
-        if (g_sel == 13 || g_sel == 14) return OV_PRESENT;
+        if (k == SDLK_ESCAPE || k == SDLK_F1) {
+            if (!(g_open && g_popup)) { set_open(!g_open); return true; }
+        }
     }
-    return OV_NONE;
-}
-
-// ---------------------------------------------------------------- drawing (presentation thread)
-static GLuint g_prog = 0, g_vao = 0, g_vbo = 0, g_font = 0;
-static GLint g_u_screen = -1, g_u_tex = -1;
-struct V { float x, y, u, v, r, g, b, a; };
-static std::vector<V> g_verts;
-
-static GLuint sh(GLenum t, const char* src) {
-    GLuint s = glCreateShader(t);
-    glShaderSource(s, 1, &src, nullptr);
-    glCompileShader(s);
-    return s;
-}
-static void init_gl() {
-    const char* vs = "#version 330 core\nlayout(location=0) in vec2 p; layout(location=1) in vec2 t; layout(location=2) in vec4 c;\n"
-                     "uniform vec2 u_screen; out vec2 vt; out vec4 vc;\n"
-                     "void main(){ gl_Position = vec4(p.x / u_screen.x * 2.0 - 1.0, 1.0 - p.y / u_screen.y * 2.0, 0.0, 1.0); vt = t; vc = c; }\n";
-    const char* fs = "#version 330 core\nin vec2 vt; in vec4 vc; uniform sampler2D u_tex; out vec4 o;\n"
-                     "void main(){ float a = vt.x < 0.0 ? 1.0 : texture(u_tex, vt).r; o = vec4(vc.rgb, vc.a * a); }\n";
-    g_prog = glCreateProgram();
-    glAttachShader(g_prog, sh(GL_VERTEX_SHADER, vs));
-    glAttachShader(g_prog, sh(GL_FRAGMENT_SHADER, fs));
-    glLinkProgram(g_prog);
-    g_u_screen = glGetUniformLocation(g_prog, "u_screen");
-    g_u_tex = glGetUniformLocation(g_prog, "u_tex");
-    glGenVertexArrays(1, &g_vao);
-    glBindVertexArray(g_vao);
-    glGenBuffers(1, &g_vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(V), (void*)0);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(V), (void*)8);
-    glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(V), (void*)16);
-    glEnableVertexAttribArray(0); glEnableVertexAttribArray(1); glEnableVertexAttribArray(2);
-    glGenTextures(1, &g_font);
-    glBindTexture(GL_TEXTURE_2D, g_font);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, FONT_W, FONT_H, 0, GL_RED, GL_UNSIGNED_BYTE, FONT_PIXELS);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-}
-
-static void quad(float x, float y, float w, float h, float u0, float v0, float u1, float v1, const float* c) {
-    V a{x, y, u0, v0, c[0], c[1], c[2], c[3]}, b{x + w, y, u1, v0, c[0], c[1], c[2], c[3]};
-    V d{x, y + h, u0, v1, c[0], c[1], c[2], c[3]}, e{x + w, y + h, u1, v1, c[0], c[1], c[2], c[3]};
-    g_verts.insert(g_verts.end(), {a, b, d, b, e, d});
-}
-static void rect(float x, float y, float w, float h, const float* c) { quad(x, y, w, h, -1, 0, -1, 0, c); }
-static float text(float x, float y, float s, const char* str, const float* c) {
-    for (const char* p = str; *p; p++) {
-        int ch = (unsigned char)*p;
-        if (ch < 32 || ch > 127) ch = '?';
-        int i = ch - 32;
-        float u0 = (i % 16) * FONT_CW / (float)FONT_W, v0 = (i / 16) * FONT_CH / (float)FONT_H;
-        float u1 = u0 + FONT_CW / (float)FONT_W, v1 = v0 + FONT_CH / (float)FONT_H;
-        quad(x, y, FONT_CW * s, FONT_CH * s, u0, v0, u1, v1, c);
-        x += FONT_CW * s;
-    }
-    return x;
-}
-
-void overlay_draw(int ww, int wh) {
-    bool open;
-    int sel;
-    bool armed;
+    if (!g_open) return false;
     {
-        std::lock_guard<std::mutex> g(g_ui_mx);
-        open = g_open; sel = g_sel; armed = g_quit_armed;
+        std::lock_guard<std::recursive_mutex> lk(g_mx);
+        if (g_init) ImGui_ImplSDL2_ProcessEvent(&e);
     }
-    if (!open && !(g_cfg.show_perf && g_perf_text[0])) return;
-    if (!g_prog) init_gl();
-    g_verts.clear();
-    float s = wh / 900.0f;
-    if (s < 0.6f) s = 0.6f;
-    if (open) s = std::min(s, 0.95f * wh / ((items().size() + 4.5f) * FONT_CH * 1.35f));   // all rows fit
-    static const float white[4] = {1, 1, 1, 1}, grey[4] = {0.7f, 0.7f, 0.75f, 1}, gold[4] = {1.0f, 0.85f, 0.3f, 1},
-                       panel[4] = {0.05f, 0.07f, 0.15f, 0.88f}, hl[4] = {0.25f, 0.35f, 0.7f, 0.9f}, shade[4] = {0, 0, 0, 0.45f};
-    if (g_cfg.show_perf && g_perf_text[0]) {
-        float tw = strlen(g_perf_text) * FONT_CW * s * 0.8f;
-        rect(ww - tw - 16 * s, 8 * s, tw + 12 * s, FONT_CH * s * 0.8f + 6 * s, shade);
-        text(ww - tw - 10 * s, 11 * s, s * 0.8f, g_perf_text, white);
-    }
-    if (open) {
-        const auto& it = items();
-        float lh = FONT_CH * s * 1.35f;
-        float pw = 46 * FONT_CW * s, ph = (it.size() + 4.5f) * lh;
-        float px = (ww - pw) / 2, py = (wh - ph) / 2;
-        rect(0, 0, (float)ww, (float)wh, shade);
-        rect(px, py, pw, ph, panel);
-        text(px + 20 * s, py + 14 * s, s, "SETTINGS", gold);
-        float y = py + 14 * s + lh * 1.4f;
-        for (size_t i = 0; i < it.size(); i++) {
-            if ((int)i == sel) rect(px + 8 * s, y - 4 * s, pw - 16 * s, lh, hl);
-            text(px + 20 * s, y, s, it[i].label, (int)i == sel ? white : grey);
-            if (!it[i].opts.empty()) {
-                char buf[96];
-                snprintf(buf, sizeof buf, "< %s >", it[i].opts[get_value((int)i)]);
-                text(px + 20 * s + 20 * FONT_CW * s, y, s, buf, white);
-            } else if ((int)i == sel && armed) {
-                text(px + 20 * s + 20 * FONT_CW * s, y, s, "press again to quit", gold);
-            }
-            y += lh;
-        }
-        const char* note = it[sel].note ? it[sel].note : "Up/Down select, Left/Right change. Saved to the .ini file.";
-        text(px + 20 * s, y + lh * 0.4f, s * 0.75f, note, grey);
-        text(px + 20 * s, y + lh * 1.3f, s * 0.75f, "F1 / Esc / Start+Back: close", grey);
-    }
-    glViewport(0, 0, ww, wh);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_CULL_FACE);
-    glDisable(GL_SCISSOR_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glUseProgram(g_prog);
-    glUniform2f(g_u_screen, (float)ww, (float)wh);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, g_font);
-    const GLint unit0 = 0;
-    glUniform1iv(g_u_tex, 1, &unit0);
-    glBindVertexArray(g_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
-    glBufferData(GL_ARRAY_BUFFER, g_verts.size() * sizeof(V), g_verts.data(), GL_STREAM_DRAW);
-    glDrawArrays(GL_TRIANGLES, 0, (GLsizei)g_verts.size());
-    glDisable(GL_BLEND);
+    // keyboard and mouse belong to the menu while it is open
+    return e.type == SDL_KEYDOWN || e.type == SDL_KEYUP || e.type == SDL_TEXTINPUT || e.type == SDL_MOUSEMOTION ||
+           e.type == SDL_MOUSEBUTTONDOWN || e.type == SDL_MOUSEBUTTONUP || e.type == SDL_MOUSEWHEEL;
 }
+
+void overlay_draw(SDL_Window* win, void* gl_context, int ww, int wh) {
+    (void)ww; (void)wh;
+    {   // tests: MENU_OPEN_AT=<presented frame> opens the menu, MENU_SECTION=<n> picks the section
+        static long open_at = getenv("MENU_OPEN_AT") ? atol(getenv("MENU_OPEN_AT")) : -1;
+        static long presents = 0;
+        if (open_at >= 0 && ++presents == open_at) {
+            if (getenv("MENU_SECTION")) g_section = atoi(getenv("MENU_SECTION")) % kSectionCount;
+            set_open(true);
+        }
+    }
+    if (!g_open && !(g_cfg.show_perf && g_perf_text[0])) return;
+    std::lock_guard<std::recursive_mutex> lk(g_mx);
+    if (!g_init) {
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGuiIO& io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NoMouseCursorChange;
+        load_fonts();
+        apply_style();
+        ImGui_ImplSDL2_InitForOpenGL(win, gl_context);
+        ImGui_ImplSDL2_SetGamepadMode(ImGui_ImplSDL2_GamepadMode_Manual, nullptr, 0);   // the menu reads pads itself
+        ImGui_ImplOpenGL3_Init("#version 330");
+        g_init = true;
+    }
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplSDL2_NewFrame();
+    ImGuiIO& io = ImGui::GetIO();
+    float px = 18.0f * io.DisplaySize.y / 540.0f;
+    px = px < 15.0f ? 15.0f : px > 72.0f ? 72.0f : px;
+    io.FontGlobalScale = px / (g_body && g_body->FontSize > 20 ? kFontPx : 13.0f);
+    if (g_open) feed_navigation(); else g_pad_pressed = 0;
+    ImGui::NewFrame();
+    if (g_cfg.show_perf && g_perf_text[0]) draw_fps();
+    if (g_open) draw_menu();
+    ImGui::Render();
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+}
+#else
+// headless build: no menu
+bool overlay_pauses_game() { return false; }
 #endif

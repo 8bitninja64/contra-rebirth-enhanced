@@ -22,6 +22,10 @@ struct Config {
     bool swap_ab_xy = false;           // gamepad: swap A<->B and X<->Y (Nintendo-style positions)
     int speed = 1;                     // game speed multiplier 1..8 (fast-forward)
     int msaa = 4;                      // anti-aliasing samples: 1 (off), 2, 4, 8
+    int volume = 100;                  // master volume 0-100
+    bool mute = false;
+    std::map<std::string, std::string> keys;   // keyboard bindings: control id -> SDL scancode name (key_<id>)
+    int start_stage = 1;               // cheat_stage: a new game starts at this stage (1-5)
     std::map<std::string, bool> enh;   // enhancement on/off by id (ini keys enh_<id>)
 };
 extern Config g_cfg;

@@ -20,6 +20,10 @@ static void set(const std::string& k, const std::string& v) {
     else if (k == "fullscreen_mode") g_cfg.fullscreen_mode = v == "exclusive" ? "exclusive" : "borderless";
     else if (k == "resolution") { int w = 0, h = 0; g_cfg.resolution = v == "native" || (sscanf(v.c_str(), "%dx%d", &w, &h) == 2 && w >= 320 && h >= 240) ? v : "auto"; }
     else if (k == "scaling") g_cfg.scaling = v == "integer" || v == "stretch" ? v : "fit";
+    else if (k == "volume") g_cfg.volume = std::max(0, std::min(100, atoi(v.c_str())));
+    else if (k == "mute") g_cfg.mute = b();
+    else if (k.compare(0, 4, "key_") == 0 && k.size() > 4) g_cfg.keys[k.substr(4)] = v;
+    else if (k == "start_stage") g_cfg.start_stage = std::max(1, std::min(5, atoi(v.c_str())));
     else if (k == "filter") g_cfg.filter = v == "sharp" || v == "nearest" ? v : "smooth";
     else if (k == "controls") g_cfg.controls = v;
     else if (k == "show_perf") g_cfg.show_perf = b();
@@ -59,7 +63,7 @@ void config_load(const char* exe_path) {
     }
     const char* keys[] = {"resolution_scale", "vsync", "widescreen", "fullscreen", "window_scale", "controls", "show_perf",
                           "anisotropy", "smooth_textures", "msaa", "speed", "swap_ab_xy",
-                          "fullscreen_mode", "resolution", "scaling", "filter"};
+                          "fullscreen_mode", "resolution", "scaling", "filter", "start_stage"};
     for (const char* k : keys) {
         std::string env = k;
         std::transform(env.begin(), env.end(), env.begin(), ::toupper);
@@ -114,6 +118,11 @@ void config_save() {
         g_cfg.resolution_scale, g_cfg.widescreen, g_cfg.vsync, g_cfg.fullscreen, g_cfg.fullscreen_mode.c_str(),
         g_cfg.resolution.c_str(), g_cfg.window_scale, g_cfg.scaling.c_str(), g_cfg.filter.c_str(),
         g_cfg.controls.c_str(), g_cfg.swap_ab_xy, g_cfg.show_perf, g_cfg.anisotropy, g_cfg.smooth_textures, g_cfg.msaa, g_cfg.speed);
+    fprintf(w, "; Master volume 0-100, mute\nvolume = %d\nmute = %d\n", g_cfg.volume, g_cfg.mute);
+    if (!g_cfg.keys.empty()) fprintf(w, "\n; Keyboard bindings (SDL key names; F1 > Controls)\n");
+    for (auto& [id, key] : g_cfg.keys) fprintf(w, "key_%s = %s\n", id.c_str(), key.c_str());
+    fprintf(w, "\n; Stage a new game starts at when the stage select cheat (enh_cheat_stage) is on: 1-5\n"
+               "start_stage = %d\n", g_cfg.start_stage);
     if (!g_cfg.enh.empty()) fprintf(w, "\n; Enhancements (1 = on, 0 = off)\n");
     for (auto& [id, on] : g_cfg.enh) fprintf(w, "enh_%s = %d\n", id.c_str(), on ? 1 : 0);
     fclose(w);

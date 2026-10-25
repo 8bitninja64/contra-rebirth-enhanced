@@ -41,6 +41,8 @@ static void ai_thread() {
         next += period;
         precise_sleep_until(next);
         if (clk::now() - next > std::chrono::milliseconds(100)) next = clk::now();   // don't spiral after stalls
+        extern bool overlay_pauses_game();
+        if (overlay_pauses_game()) { next = clk::now(); continue; }   // F1 menu open: sound stops too
         if (g_ai_inflight.load() > g_ai_limit) { g_ai_skipped++; continue; }
         g_ai_inflight++;
         post_irq([](Ctx* c) {
