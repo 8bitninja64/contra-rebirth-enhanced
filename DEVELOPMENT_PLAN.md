@@ -37,11 +37,15 @@ Order (each step verified before the next):
      smooth / sharp / nearest, resolution auto / native / WxH for the window.
    - built, untested: exclusive fullscreen at a chosen resolution (needs a person at the screen).
    - 16:10 / 21:9 only make sense after step 2; the game's picture is 4:3 or pillarboxed 16:9.
-2. True widescreen investigation: the 2D playfield is 320×240 rendered into the EFB then
-   copied to a 512×256 texture. Find the M2 engine camera/scroll width, layer culling and spawn
-   bounds; widen the copy/projection. Document every glitch; 4:3 stays the default fallback.
-3. Frame pacing: 59.94 Hz retrace-driven logic. 60 FPS is native; >60 FPS would need
-   interpolation in game code and is out of scope unless a safe path is found.
+2. True widescreen: done for Stage 1 (enhancement `widescreen`; renderer widens the 320×240
+   playfield pass, copy and composite; hook on fn_800DFC30 widens tile culling). Todo: verify
+   Stages 2–5 and bosses, the alarm tint, then decide whether it becomes the default.
+3. Frame pacing: done to 59.6 game frames/s (see KNOWN_ISSUES). >60 fps would need
+   interpolation of the game's own movement; out of scope.
+
+## Phase 6b — cheats (done)
+Infinite lives, invincibility (game's no-death flag), always Spread/Laser/Homing; F1 rows.
+Todo: stage select (stage number not located yet; engines Engine1A…5C are created in sequence).
 
 ## Phase 6 — enhancement system
 - built: `src/hooks.txt` → the generator keeps the original as `o_X` and routes `f_X` through a hook slot.

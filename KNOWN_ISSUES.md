@@ -4,13 +4,14 @@ Inherited from upstream v0.2 unless marked otherwise. Update when an issue is co
 
 | Area | Issue | Status |
 | --- | --- | --- |
-| Video | In 16:9 mode the game draws a pillarboxed 4:3 picture; no true widescreen yet. | open |
+| Video | True widescreen (F1 → "True widescreen", needs Aspect 16:9; off by default): checked through Stage 1, 1B and Stage 2 (A/B) by autoplay. Scrolling sections are correct. Where the camera is locked against a map edge (Stage 1 boss room, parts of 1B and 2) the extra width shows past the end of the level art (empty/black strips), because those rooms are only 320 wide. Fix idea: clamp the widened view to the map bounds, or fall back to 4:3 bars per scene. The Stage 1 alarm tint colours only the old 4:3 area. Stages 3–5 unchecked. | in progress |
 | Video | Glitch strip at the right edge on the first Stage 1 frame (upstream NOTES). | unverified |
 | Video | Only the game's own 4:3 / 16:9 (pillarboxed) picture; 16:10 and 21:9 need true widescreen first (stretching is available but is not widescreen). | open |
 | Input | Keyboard and pad bindings are hard-coded; only the first controller is used. | open |
 | Audio | Not yet confirmed by ear on any platform. | open |
 | Linux | Windowed SDL build verified only under WSLg (presents ~22 fps there; game logic and audio run at full speed). Real desktop Linux and Steam Deck untested. | open |
-| Timing | Windows (RTX 3070 laptop, no capture): retraces 59.0–60.0/s (avg ≈59.45, target 59.94; ~0.6/s dropped while the previous one is still undelivered), and the game completes only ~57–58 frames/s (`frame_stats`), so it runs ~3% slow. Screenshot capture (`SHOT_EVERY`) makes it worse (58.5). | investigating |
+| Timing | Fixed most of it: game ran on the integrated GPU, the SDL event pump on the emulation thread stalled 18–35 ms, and the FIFO re-parsed draws per byte. Now 59.6 game frames/s average in Stage 1 (RTX 3070 laptop), retraces at exactly 59.94; about 1–2 frames per 5 s still miss a retrace because of GL driver time inside draws. | open (minor) |
+| Timing | Higher than 60 fps is not offered: game logic, animation and audio advance once per retrace; more frames would only repeat images unless the game's own movement were interpolated. | by design |
 | Video | The game itself scales its 320×240 playfield to 640×480 with bilinear filtering, so the frame we receive is already soft; "Sharp"/"Nearest" output filters cannot undo that. Candidate enhancement: force point sampling on that texture draw. | open |
 | Video | Exclusive fullscreen and display-mode switching are implemented but untested (not exercised automatically, it would change the desktop mode). | open |
 | Build | MSVC is not supported; Windows builds use MSYS2 MinGW-w64. | by design |
