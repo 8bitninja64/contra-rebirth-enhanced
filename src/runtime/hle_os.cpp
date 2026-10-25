@@ -58,6 +58,20 @@ void hle_OSReport(Ctx* c) {
     std::string s = guest_format(c, c->r[3], 4);
     fprintf(g_log, "[OSReport] %s", s.c_str());
     if (s.empty() || s.back() != '\n') fputc('\n', g_log);
+    // REPORT_TRACE=<text>: log the guest call chain (link registers on the guest stack) and
+    // r3-r5 of the caller when a report contains <text> (RE: who constructs what)
+    static const char* want = getenv("REPORT_TRACE");
+    if (want && s.find(want) != std::string::npos) {
+        fprintf(g_log, "[report_trace] lr %08X r31 %08X r30 %08X; guest stack:", c->lr, c->r[31], c->r[30]);
+        uint32_t sp = c->r[1];
+        for (int k = 0; k < 24 && sp >= 0x80000000u && sp < 0x81800000u; k++) {   // back chain: [sp] = caller sp, [sp+4] = lr
+            uint32_t next = R32(sp);
+            if (next < 0x80000000u || next >= 0x817FFFF0u || next <= sp) break;
+            fprintf(g_log, " %08X", R32(next + 4));
+            sp = next;
+        }
+        fputc('\n', g_log);
+    }
 }
 
 void hle_OSPanic(Ctx* c) {

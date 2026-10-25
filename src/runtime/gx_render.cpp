@@ -40,6 +40,14 @@ static const float kWsW = 320.f * (16.f / 9.f) / (4.f / 3.f);   // 426.67: playf
 static bool g_ws_pass = false;      // the current draw setup is the (widened) playfield pass
 static uint32_t g_ws_copy = 0;      // texture address the playfield was copied to this frame
 static uint32_t texmap_addr(int m);
+// Per tile layer (set by enhancements/widescreen.cpp around fn_80111A70): its horizontal
+// extent in camera-relative clip units (+-1 = the 16:9 view edge, before g_ws_shift was
+// applied), and an optional horizontal stretch (backgrounds that are only 4:3 wide).
+bool g_ws_in_layer = false;
+float g_ws_layer_stretch = 1.f;
+float g_ws_shift = 0.f;            // camera shift (clip units) the camera locator hook applied
+float g_ws_lmin = 0.f, g_ws_lmax = 0.f;
+bool g_ws_lany = false;
 static int RS = 1, PW = 640, PH = 528;           // render scale and physical EFB size
 static bool g_ok = false, g_tried = false;
 static GLuint g_fbo, g_efb_color, g_efb_depth, g_vao, g_vbo, g_vs;
@@ -1094,21 +1102,39 @@ void gx_draw(uint8_t prim, int vat, uint32_t count, const uint8_t* data, int vsi
         p = start + vsize;
         transform(r, verts[i]);
     }
+    // In the widened playfield pass, clip x spans the whole 640-wide EFB while the view is
+    // its first 426.67 pixels: view units v (-1..1 across the view) from clip units c.
+    const float vk = (EFB_W / 2.f) / (kWsW / 2.f), vc = -1.f + kWsW / EFB_W;   // scale, view centre in clip
+    auto to_view = [&](float c) { return (c - vc) * vk; };
+    if (g_ws_pass && g_ws_in_layer) {
+        for (uint32_t i = 0; i < count; i++) {
+            const float w = verts[i].pos[3];
+            const float v = to_view(verts[i].pos[0] / w) + g_ws_shift;
+            if (!g_ws_lany) { g_ws_lmin = g_ws_lmax = v; g_ws_lany = true; }
+            g_ws_lmin = std::min(g_ws_lmin, v); g_ws_lmax = std::max(g_ws_lmax, v);
+            if (g_ws_layer_stretch != 1.f)   // stretch about the view centre
+                verts[i].pos[0] = (vc + (verts[i].pos[0] / w - vc) * g_ws_layer_stretch) * w;
+        }
+    }
     const bool ws_composite = g_ws_on && g_ws_copy && g_ds.ortho && std::fabs(g_ds.P[0] - 2.f / 854) < 2e-6f;
     if (g_ws_pass || ws_composite) {
         // full-screen overlays (fades, alarm tints, flashes) cover exactly the old 4:3 area,
         // which lands on clip x = +-0.75 in the widened pass and on the 16:9 canvas alike:
         // stretch them to +-1
         const float edge = 320.f / kWsW;
+        const float cc = g_ws_pass ? vc : 0.f, ck = g_ws_pass ? vk : 1.f;   // composite: clip = view
         bool lo = false, hi = false, only_edges = true;
         for (uint32_t i = 0; i < count && only_edges; i++) {
-            float x = verts[i].pos[0] / verts[i].pos[3];
+            float x = (verts[i].pos[0] / verts[i].pos[3] - cc) * ck;
             if (std::fabs(x + edge) < 1e-3f) lo = true;
             else if (std::fabs(x - edge) < 1e-3f) hi = true;
             else only_edges = false;
         }
         if (only_edges && lo && hi)
-            for (uint32_t i = 0; i < count; i++) verts[i].pos[0] /= edge;
+            for (uint32_t i = 0; i < count; i++) {
+                const float w = verts[i].pos[3];
+                verts[i].pos[0] = (cc + (verts[i].pos[0] / w - cc) / edge) * w;
+            }
     }
     if (ws_composite) {
         // the quad showing the playfield copy (stretched to the canvas just above) also reads
