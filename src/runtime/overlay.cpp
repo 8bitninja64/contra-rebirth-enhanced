@@ -3,8 +3,8 @@
 // UI state is changed on the emulation thread (input); drawing happens on the
 // presentation thread after the game frame is blitted.
 #if defined(_WIN32) || defined(USE_SDL)
-#ifdef _WIN32
 #include "game.h"
+#ifdef _WIN32
 #include "glad.h"
 #else
 #define GL_GLEXT_PROTOTYPES

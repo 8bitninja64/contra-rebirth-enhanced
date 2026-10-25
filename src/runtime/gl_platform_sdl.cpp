@@ -1,8 +1,8 @@
 // Windowed platform layer (Windows, or Linux with -DUSE_SDL): SDL2 window with an
 // OpenGL 3.3 core context, audio output and keyboard/gamepad input.
 #if defined(_WIN32) || defined(USE_SDL)
-#ifdef _WIN32
 #include "game.h"
+#ifdef _WIN32
 #include "glad.h"
 #else
 #define GL_GLEXT_PROTOTYPES

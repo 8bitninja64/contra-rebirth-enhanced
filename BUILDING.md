@@ -45,5 +45,10 @@ ninja -C build-linux -j4
 ./build-linux/contrarebirth ../game
 ```
 
+`tools/contrarebirth.sh` is the launcher for an installed copy (puts a bundled `lib/` on
+`LD_LIBRARY_PATH`, runs from its own folder). For Steam Deck: copy the exe, the launcher and your
+`game` folder into one directory, add the launcher to Steam as a non-Steam game, and pick the
+"Gamepad" controller template.
+
 Without `-DUSE_SDL=ON` you get the headless EGL test build from upstream (screenshots via
 `SHOT_EVERY`/`SHOT_DIR`, stops after `TIMEOUT` seconds, default 15).
