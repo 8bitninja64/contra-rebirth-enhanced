@@ -123,7 +123,15 @@ bool gl_platform_init(int w, int h) {
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     int scale = g_cfg.window_scale;
     int ww = (g_cfg.widescreen ? 854 : 640) * scale, wh = 480 * scale;
-    parse_resolution(&ww, &wh);
+    if (!parse_resolution(&ww, &wh)) {
+        // automatic size: keep the window inside the desktop's usable area (scaled laptop
+        // screens are often smaller than 1708x960), so it never looks like fullscreen
+        SDL_Rect r;
+        if (SDL_GetDisplayUsableBounds(0, &r) == 0 && r.w > 0 && r.h > 0) {
+            const float f = std::min(0.85f * r.w / ww, 0.85f * (r.h - 40) / wh);
+            if (f < 1) { ww = (int)(ww * f); wh = (int)(wh * f); }
+        }
+    }
     Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
     g_win = SDL_CreateWindow(GAME_NAME " (native)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                              ww, wh, flags);

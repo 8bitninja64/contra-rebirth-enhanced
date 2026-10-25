@@ -13,5 +13,10 @@
   (sharp bilinear) / nearest; `fullscreen_mode` = borderless / exclusive; `resolution` = auto /
   native / WxH (window size, exclusive display mode). All in the F1 menu and the ini.
 - Debug: `PRESENT_SHOT=<file> PRESENT_SHOT_AT=<n>` saves the presented window image.
+- Controllers: every connected pad is used; `gamecontrollerdb.txt` (SDL_GameControllerDB) is
+  loaded from next to the exe; unknown pads get a generic layout instead of being ignored
+  (fixes the 8BitDo Ultimate 2 over Bluetooth doing nothing).
+- Enhancement `skip_strap_screen` (on by default): start-up goes straight to the Konami logo.
+- The automatic window size now fits inside the desktop (it was 1708x960 regardless).
 - Docs: `ARCHITECTURE.md`, `BUILDING.md`, `DEVELOPMENT_PLAN.md`, `KNOWN_ISSUES.md`.
 - `.gitignore`: decrypted WAD contents, `dist/`, AppImages.

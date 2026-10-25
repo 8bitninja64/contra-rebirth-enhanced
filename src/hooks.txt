@@ -3,3 +3,4 @@
 # at run time, or the original when none is. Names must be in config/symbols.txt and must not
 # also be in hle.txt. Regenerate src/gen after editing this file.
 VIWaitForRetrace        # frame_stats
+fn_80013F00             # skip_strap_screen (boot sequence state machine)
