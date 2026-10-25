@@ -30,7 +30,7 @@ static bool g_ok = false, g_tried = false;
 static GLuint g_fbo, g_efb_color, g_efb_depth, g_vao, g_vbo, g_vs;
 static GLuint g_xfb_tex;            // last presented frame
 static int g_xfb_w = 640, g_xfb_h = 480;
-static uint64_t g_frame = 0;
+uint64_t g_frame = 0;   // presented frames (screenshot numbering); also read by debug_tools.cpp
 static uint64_t g_tex_epoch = 1;   // bumps each frame and on TLUT loads: texture cache re-validates
 char g_perf_text[128] = "";
 #include <chrono>
@@ -277,6 +277,19 @@ static void setup_vertex_pipeline(int vat) {
     d.vx0 = (xo - 342.f) / (EFB_W / 2.f) - 1.f; d.vx1 = wd / (EFB_W / 2.f);
     d.vy0 = 1.f - (yo - 342.f) / (EFB_H / 2.f); d.vy1 = -(ht / (EFB_H / 2.f));
     d.vz0 = 2.f * fz / S - 1.f; d.vz1 = 2.f * zr / S;
+    {   // FRAMELOG: each distinct viewport/projection used in a logged frame (widescreen RE)
+        static bool flog = getenv("FRAMELOG") != nullptr;
+        static uint64_t lf = ~0ull; static float last[10];
+        float cur[10] = {wd, ht, xo, yo, d.P[0], d.P[1], d.P[2], d.P[3], (float)d.ortho, 0};
+        if (flog && g_frame % 50 == 0 && (lf != g_frame || memcmp(cur, last, sizeof cur))) {
+            lf = g_frame; memcpy(last, cur, sizeof cur);
+            uint32_t s0 = g_gx.bp[0x20], s1 = g_gx.bp[0x21];
+            fprintf(g_log, "[view] f%llu vp %.0fx%.0f @%.0f,%.0f %s P %.5f %.2f %.5f %.2f scissor y,x %d,%d - %d,%d\n",
+                    (unsigned long long)g_frame, 2 * wd, -2 * ht, xo - 342, yo - 342, d.ortho ? "ortho" : "persp",
+                    d.P[0], d.P[1], d.P[2], d.P[3], (int)(s0 & 0x7FF) - 342, (int)((s0 >> 12) & 0x7FF) - 342,
+                    (int)(s1 & 0x7FF) - 342, (int)((s1 >> 12) & 0x7FF) - 342);
+        }
+    }
     d.ncol = g_gx.xf_reg[0x09] & 3;
     d.ntg = g_gx.xf_reg[0x3F] & 15;
     d.dual = g_gx.xf_reg[0x12] & 1;

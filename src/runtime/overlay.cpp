@@ -14,6 +14,7 @@
 #include "overlay.h"
 #include "config.h"
 #include "font_atlas.h"
+#include "enhancements.h"
 #include <mutex>
 #include <string>
 #include <vector>
@@ -50,12 +51,19 @@ static const std::vector<Item>& items() {
          "Window size / exclusive mode. Not the internal rendering resolution."},
         {"Scaling", {"Fit (keep aspect)", "Integer", "Stretch"}, "Integer: whole multiples of the game's 240 lines."},
         {"Filter", {"Smooth", "Sharp", "Nearest"}, "Sharp: crisp pixels without uneven-pixel shimmer."},
-        {"Close menu", {}, nullptr},
-        {"Quit game", {}, nullptr},
     };
+    static bool built = false;
+    if (!built) {   // one On/Off row per enhancement (cheats included), then the two actions
+        built = true;
+        for (int i = 0; i < enh_count(); i++) v.push_back({enh_get(i)->name, {"Off", "On"}, enh_get(i)->description});
+        v.push_back({"Close menu", {}, nullptr});
+        v.push_back({"Quit game", {}, nullptr});
+    }
     return v;
 }
+static const int kEnhFirst = 15;   // index of the first enhancement row
 static int get_value(int i) {
+    if (i >= kEnhFirst && i < kEnhFirst + enh_count()) return enh_enabled(enh_get(i - kEnhFirst)->id) ? 1 : 0;
     switch (i) {
         case 0: return g_cfg.resolution_scale - 1;
         case 1: return g_cfg.widescreen ? 1 : 0;
@@ -81,6 +89,7 @@ static int get_value(int i) {
     return 0;
 }
 static void set_value(int i, int v) {
+    if (i >= kEnhFirst && i < kEnhFirst + enh_count()) { enh_set_enabled(enh_get(i - kEnhFirst)->id, v != 0); return; }
     switch (i) {
         case 0: g_cfg.resolution_scale = v + 1; break;
         case 1: g_cfg.widescreen = v; break;
@@ -212,6 +221,7 @@ void overlay_draw(int ww, int wh) {
     g_verts.clear();
     float s = wh / 900.0f;
     if (s < 0.6f) s = 0.6f;
+    if (open) s = std::min(s, 0.95f * wh / ((items().size() + 4.5f) * FONT_CH * 1.35f));   // all rows fit
     static const float white[4] = {1, 1, 1, 1}, grey[4] = {0.7f, 0.7f, 0.75f, 1}, gold[4] = {1.0f, 0.85f, 0.3f, 1},
                        panel[4] = {0.05f, 0.07f, 0.15f, 0.88f}, hl[4] = {0.25f, 0.35f, 0.7f, 0.9f}, shade[4] = {0, 0, 0, 0.45f};
     if (g_cfg.show_perf && g_perf_text[0]) {

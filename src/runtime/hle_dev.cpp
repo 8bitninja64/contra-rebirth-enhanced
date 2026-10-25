@@ -42,6 +42,7 @@ static void vi_thread() {
         vi_inflight.store(1);
         post_irq([](Ctx* c) {
             g_vi_count++;
+            extern void debug_on_retrace(uint64_t); debug_on_retrace(g_vi_count);
             mmio_poke(0xCC002030u, 0x8000u | 0x1001u);   // DI0: retrace interrupt pending
             raise_interrupt(c, 24);                       // PI_VI
             vi_inflight.store(0);

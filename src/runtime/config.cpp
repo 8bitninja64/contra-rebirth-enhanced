@@ -8,6 +8,7 @@
 
 Config g_cfg;
 static std::string g_ini_path = GAME_INI;
+static bool g_env_override = false;   // settings came from environment variables (tests): never write the .ini
 
 static void set(const std::string& k, const std::string& v) {
     auto b = [&] { return v == "1" || v == "true" || v == "yes" || v == "on"; };
@@ -62,7 +63,7 @@ void config_load(const char* exe_path) {
     for (const char* k : keys) {
         std::string env = k;
         std::transform(env.begin(), env.end(), env.begin(), ::toupper);
-        if (const char* v = getenv(env.c_str())) set(k, v);
+        if (const char* v = getenv(env.c_str())) { set(k, v); g_env_override = true; }
     }
     fprintf(stderr, "[config] resolution x%d, %s, vsync %d, controls %s\n", g_cfg.resolution_scale,
             g_cfg.widescreen ? "16:9" : "4:3", g_cfg.vsync, g_cfg.controls.c_str());
@@ -70,6 +71,7 @@ void config_load(const char* exe_path) {
 }
 
 void config_save() {
+    if (g_env_override) return;
     FILE* w = fopen(g_ini_path.c_str(), "w");
     if (!w) return;
     fprintf(w,

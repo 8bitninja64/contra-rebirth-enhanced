@@ -3,6 +3,7 @@
 #include "config.h"
 #include "hle.h"
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cstdint>
 #include <vector>
@@ -27,6 +28,14 @@ bool enh_hook(const char* guest_name, HookFn fn) {
         if (HOOK_DEFS[i].name && !strcmp(HOOK_DEFS[i].name, guest_name)) { g_hook_fn[i] = fn; return true; }
     fprintf(g_log, "[enh] hook target %s is not in hooks.txt (regenerate src/gen after editing it)\n", guest_name);
     return false;
+}
+
+// ---------------------------------------------------------------- per-frame callbacks
+static std::vector<void (*)()>& frame_fns() { static std::vector<void (*)()> v; return v; }
+void enh_on_frame(void (*fn)()) { frame_fns().push_back(fn); }
+static void hook_VIWaitForRetrace(Ctx* c, GuestFn orig) {
+    orig(c);
+    for (auto fn : frame_fns()) fn();
 }
 
 // ---------------------------------------------------------------- SHA-1 (file check only)
@@ -101,11 +110,22 @@ void enh_init_all(const char* dol_path) {
     if (!g_compatible)
         fprintf(g_log, "[enh] main.dol sha1 %s is not the supported build %s: all enhancements disabled\n",
                 h.empty() ? "(unreadable)" : h.c_str(), kSupportedDolSha1);
+    if (g_compatible) enh_hook("VIWaitForRetrace", hook_VIWaitForRetrace);
+    // ENH="id=1,id2=0": per-run overrides for tests, not saved
+    std::string env = getenv("ENH") ? getenv("ENH") : "";
+    auto env_value = [&](const char* id, bool* out) {
+        std::string key = std::string(id) + "=";
+        size_t p = env.find(key);
+        if (p == std::string::npos || (p && env[p - 1] != ',')) return false;
+        *out = env[p + key.size()] == '1';
+        return true;
+    };
     bool new_keys = false;
     for (auto& s : slots()) {
         auto it = g_cfg.enh.find(s.e->id);
         if (it == g_cfg.enh.end()) { g_cfg.enh[s.e->id] = s.e->default_on; new_keys = true; }   // list it in the .ini
         bool on = g_cfg.enh[s.e->id];
+        env_value(s.e->id, &on);
         if (on && g_compatible) start(s);
         fprintf(g_log, "[enh] %-20s %s  %s\n", s.e->id, s.e->active && *s.e->active ? "on " : "off", s.e->description);
     }

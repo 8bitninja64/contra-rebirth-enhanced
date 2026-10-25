@@ -28,6 +28,8 @@ void enh_register(const Enhancement* e);
 // Startup: checks the DOL hash, reads enh_* settings, runs init() of the enabled ones.
 void enh_init_all(const char* dol_path);
 bool enh_hook(const char* guest_name, HookFn fn);   // false if the name is not in hooks.txt
+// Run fn once per game frame (after the game's VIWaitForRetrace returns, on the game thread).
+void enh_on_frame(void (*fn)());
 
 int enh_count();
 const Enhancement* enh_get(int i);

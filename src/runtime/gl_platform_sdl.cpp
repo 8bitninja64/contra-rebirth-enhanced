@@ -244,6 +244,8 @@ static void update_input() {
     if (b & IN_L2) lt = 1;
     if (b & IN_R2) rt = 1;
     if (overlay_open()) { b = 0; lx = ly = rx = ry = lt = rt = 0; }   // the menu owns the controls while open
+    static const bool no_host_input = getenv("NO_HOST_INPUT") != nullptr;   // scripted tests: AUTOPRESS only
+    if (no_host_input) { b = 0; lx = ly = rx = ry = lt = rt = 0; }
     g_host_input.rx = std::max(-1.f, std::min(1.f, rx));
     g_host_input.ry = std::max(-1.f, std::min(1.f, ry));
     g_host_input.lt = std::max(0.f, std::min(1.f, lt));
