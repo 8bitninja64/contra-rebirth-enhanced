@@ -15,6 +15,7 @@
 //                 +0x88 current state handler (8004A030 on foot, 8004B360 dying)
 #include "enhancements.h"
 #include "hle.h"
+#include "config.h"
 
 static const uint32_t kGameState = 0x802E0138u;
 
@@ -69,3 +70,25 @@ REGISTER_ENHANCEMENT(cheat_invincible);
 REGISTER_ENHANCEMENT(cheat_spread);
 REGISTER_ENHANCEMENT(cheat_laser);
 REGISTER_ENHANCEMENT(cheat_homing);
+
+// Stage select. The scene manager (fn_8000C420) calls the engine creator held as a
+// member-function pointer {this adjust, vtable offset, function} at manager+0x4F8. A new game
+// goes EngineSelect -> EngineStart ("AREA n") -> creator of Engine1A (fn_8000F080). When the
+// cheat is on, that Engine1A creator is swapped for the chosen stage's first engine; every
+// engine then hands over to the next one as usual.
+static bool g_stage_active = false;
+static const uint32_t kStageCreators[5] = {0x8000F080u /*1A*/, 0x8000F6F0u /*2A*/, 0x8000FD60u /*3A*/,
+                                           0x80010080u /*4A*/, 0x80010A40u /*5A*/};
+static void hook_scene_create(Ctx* c, GuestFn orig) {
+    const uint32_t mgr = c->r[3];
+    if (g_stage_active && g_cfg.start_stage > 1 && R32(mgr + 0x4FC) == 0xFFFFFFFFu && R32(mgr + 0x500) == kStageCreators[0]) {
+        W32(mgr + 0x500, kStageCreators[g_cfg.start_stage - 1]);
+        fprintf(g_log, "[cheat] stage select: starting at stage %d\n", g_cfg.start_stage);
+    }
+    orig(c);
+}
+static bool init_stage() { return enh_hook("fn_8000C420", hook_scene_create); }
+static const Enhancement cheat_stage = {
+    "cheat_stage", "Cheat: stage select", "A new game starts at the chosen stage (start_stage)", false, init_stage,
+    &g_stage_active};
+REGISTER_ENHANCEMENT(cheat_stage);
