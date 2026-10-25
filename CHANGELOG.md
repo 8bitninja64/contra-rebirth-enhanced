@@ -18,5 +18,10 @@
   (fixes the 8BitDo Ultimate 2 over Bluetooth doing nothing).
 - Enhancement `skip_strap_screen` (on by default): start-up goes straight to the Konami logo.
 - The automatic window size now fits inside the desktop (it was 1708x960 regardless).
+- Cheats (F1 menu, off by default): infinite lives, invincibility (the game's own no-death
+  flag; pits still kill), always Spread / Laser / Homing.
+- RE/test tools: RAM snapshots, POKE, write watchpoint, draw call-stack tracing, NO_HOST_INPUT.
+- True widescreen (enhancement `widescreen`, needs 16:9): widened playfield pass, copy and
+  composite, plus widened view rectangle for culling. In progress.
 - Docs: `ARCHITECTURE.md`, `BUILDING.md`, `DEVELOPMENT_PLAN.md`, `KNOWN_ISSUES.md`.
 - `.gitignore`: decrypted WAD contents, `dist/`, AppImages.

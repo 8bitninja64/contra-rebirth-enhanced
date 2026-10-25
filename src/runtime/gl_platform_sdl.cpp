@@ -22,6 +22,7 @@
 #include "audio_ring.h"
 #include <atomic>
 #include <thread>
+#include <chrono>
 #include <mutex>
 #include <condition_variable>
 #include <vector>
@@ -112,7 +113,39 @@ static void apply_display() {
     SDL_SetWindowFullscreen(g_win, SDL_WINDOW_FULLSCREEN_DESKTOP);
 }
 
+// The window belongs to a UI thread that pumps its events and samples input. Pumping on the
+// emulation thread (once per presented frame) blocked for 18-35 ms now and then while the
+// present thread swapped buffers, and the game missed one or two retraces each time
+// (measured with the frame_stats enhancement).
+static std::mutex g_ui_init_mx;
+static std::condition_variable g_ui_init_cv;
+static int g_ui_state = 0;   // 0 starting, 1 ready, -1 failed
+static void ui_thread();
+static void update_input();
+
 bool gl_platform_init(int w, int h) {
+    std::thread(ui_thread).detach();
+    {
+        std::unique_lock<std::mutex> lk(g_ui_init_mx);
+        g_ui_init_cv.wait(lk, [] { return g_ui_state != 0; });
+    }
+    if (g_ui_state < 0) return false;
+    SDL_GL_MakeCurrent(g_win, g_glc);
+    t_current = true;
+#ifdef _WIN32
+    if (!gl_load(SDL_GL_GetProcAddress)) return false;
+#endif
+    SDL_GL_SetSwapInterval(0);
+    std::thread(present_thread).detach();
+    fprintf(stderr, "[gl] %s | %s\n", glGetString(GL_RENDERER), glGetString(GL_VERSION));
+    (void)w; (void)h;
+    return true;
+}
+
+// UI thread: SDL, window and both GL contexts (released again; the emulation and present
+// threads make them current), audio and controllers.
+static bool ui_setup() {
+    SDL_SetHint(SDL_HINT_JOYSTICK_THREAD, "1");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) != 0) {
         fprintf(stderr, "[sdl] init failed: %s\n", SDL_GetError());
         return false;
@@ -142,14 +175,7 @@ bool gl_platform_init(int w, int h) {
     SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
     g_glc = SDL_GL_CreateContext(g_win);                      // renderer (shares textures/syncs)
     if (!g_glc) { fprintf(stderr, "[sdl] GL context failed: %s\n", SDL_GetError()); return false; }
-    SDL_GL_MakeCurrent(g_win, g_glc);
-    t_current = true;
-#ifdef _WIN32
-    if (!gl_load(SDL_GL_GetProcAddress)) return false;
-#endif
-    SDL_GL_SetSwapInterval(0);
-    std::thread(present_thread).detach();
-    fprintf(stderr, "[gl] %s | %s\n", glGetString(GL_RENDERER), glGetString(GL_VERSION));
+    SDL_GL_MakeCurrent(g_win, nullptr);                       // both contexts are used on other threads
     // audio: 32 kHz stereo s16, fed from the AX output
     SDL_AudioSpec want = {}, have = {};
     want.freq = 32000; want.format = AUDIO_S16SYS; want.channels = 2; want.samples = 512;
@@ -165,8 +191,26 @@ bool gl_platform_init(int w, int h) {
     }
     for (int i = 0; i < SDL_NumJoysticks(); i++) open_pad(i);
     if (g_pads.empty()) fprintf(stderr, "[input] no controller found (keyboard active; controllers can be plugged in any time)\n");
-    (void)w; (void)h;
     return true;
+}
+
+static void handle_event(const SDL_Event& e);
+static void ui_thread() {
+    bool ok = ui_setup();
+    {
+        std::lock_guard<std::mutex> g(g_ui_init_mx);
+        g_ui_state = ok ? 1 : -1;
+    }
+    g_ui_init_cv.notify_all();
+    if (!ok) return;
+    for (;;) {
+        SDL_Event e;
+        if (SDL_WaitEventTimeout(&e, 4)) {
+            handle_event(e);
+            while (SDL_PollEvent(&e)) handle_event(e);
+        }
+        update_input();   // at least every 4 ms, so a new press is seen within the game's next frame
+    }
 }
 
 void gl_platform_make_current() {
@@ -264,9 +308,10 @@ static void apply_action(int a) {
     else if (a == OV_QUIT) exit(0);
 }
 
-bool gl_platform_poll() {
-    SDL_Event e;
-    while (SDL_PollEvent(&e)) {
+bool gl_platform_poll() { return true; }   // events are pumped on the UI thread
+
+static void handle_event(const SDL_Event& e) {
+    {
         if (e.type == SDL_QUIT) exit(0);
         if (e.type == SDL_KEYDOWN) {
             SDL_Keycode k = e.key.keysym.sym;
@@ -317,12 +362,13 @@ bool gl_platform_poll() {
                 }
         }
     }
-    update_input();
-    return true;
 }
 
 // Called on the emulation thread with the finished frame (top-down texture rows).
+uint64_t g_ns_handoff = 0, g_ns_poll = 0;   // host time in the frame hand-off / event poll (frame_stats)
+static uint64_t ns_now() { return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 void gl_platform_present(unsigned tex, int w, int h) {
+    const uint64_t t_start = ns_now();
     if (!g_present_fbo) glGenFramebuffers(1, &g_present_fbo);
     static GLuint dst_fbo = 0;
     if (!dst_fbo) glGenFramebuffers(1, &dst_fbo);
@@ -355,7 +401,10 @@ void gl_platform_present(unsigned tex, int w, int h) {
         g_ready = s;
     }
     g_pcv.notify_one();
+    const uint64_t t_poll = ns_now();
+    g_ns_handoff += t_poll - t_start;
     gl_platform_poll();
+    g_ns_poll += ns_now() - t_poll;
 }
 
 // Final scaling of the frame to the window. Downscaling (internal resolution above the

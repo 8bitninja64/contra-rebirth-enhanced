@@ -26,6 +26,7 @@ struct HThread {
     Ctx ctx;
     std::condition_variable cv;
     bool go = false;
+    uint64_t woken_at = 0;   // steady-clock ns when it was told to run (switch latency)
     uint32_t guest_ctx = 0;
     std::thread th;
 };
@@ -40,6 +41,7 @@ void threads_init_main(Ctx* c) {
     static HThread main_ht;
     static std::unique_lock<std::mutex> lk(g_big);
     t_self = &main_ht;
+    extern void debug_register_thread(); debug_register_thread();   // SAMPLE_PROFILE
     t_lock = &lk;
     (void)c;
 }
@@ -73,20 +75,25 @@ void hle_OSSaveContext(Ctx* c) {
     c->r[3] = 0;
 }
 
+std::atomic<uint64_t> g_ns_switch{0};   // host time between handing a guest thread the CPU and it running
+static uint64_t sw_now() { return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 static void switch_to(HThread* next) {
     HThread* me = t_self;
     if (next == me) return;
     g_switches++;
     if (g_dbg) fprintf(g_log, "[sched] %08X -> %08X\n", me->guest_ctx, next->guest_ctx);
     next->go = true;
+    next->woken_at = sw_now();
     next->cv.notify_one();
     me->go = false;
     while (!me->go) me->cv.wait(*t_lock);
+    if (me->woken_at) g_ns_switch += sw_now() - me->woken_at;
 }
 
 static void thread_main(HThread* ht, uint32_t entry) {
     std::unique_lock<std::mutex> lk(g_big);
     t_self = ht;
+    extern void debug_register_thread(); debug_register_thread();
     t_lock = &lk;
     while (!ht->go) ht->cv.wait(lk);
     Ctx* c = &ht->ctx;

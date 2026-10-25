@@ -23,7 +23,9 @@ static std::vector<uint32_t> g_mail;
 static FILE* g_wav = nullptr;
 static uint32_t g_wav_bytes = 0;
 uint64_t g_ax_frames = 0;
-uint64_t g_ai_skipped = 0;   // AI periods dropped because the game had not serviced earlier ones
+uint64_t g_ai_skipped = 0;
+std::atomic<uint64_t> g_ns_audio{0};   // host time in audio interrupts and DSP mixing (frame_stats)
+static uint64_t audio_now() { return (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }   // AI periods dropped because the game had not serviced earlier ones
 static int g_ai_limit = getenv("AI_LIMIT") ? atoi(getenv("AI_LIMIT")) : 16;   // up to 48 ms of backlog is caught up
 
 void audio_out(const int16_t* lr, int frames);   // host output (platform)
@@ -42,6 +44,7 @@ static void ai_thread() {
         if (g_ai_inflight.load() > g_ai_limit) { g_ai_skipped++; continue; }
         g_ai_inflight++;
         post_irq([](Ctx* c) {
+            const uint64_t t0 = audio_now();
             // the buffer that just "played"
             if (g_ai_buf && g_ai_len) {
                 std::vector<int16_t> s(g_ai_len / 2);
@@ -50,6 +53,7 @@ static void ai_thread() {
             }
             if (g_ai_cb) guest_call(c, g_ai_cb, {});
             g_ai_inflight--;
+            g_ns_audio += audio_now() - t0;
         });
     }
 }
@@ -69,10 +73,16 @@ void hle_DSPSendMailToDSP(Ctx* c) {
         uint32_t list = g_mail.back();
         uint32_t words = g_mail[g_mail.size() - 2] & 0xFFFF;
         g_mail.clear();
+        const uint64_t t0 = audio_now();
         ax_process(phys_to_guest(list), words);
+        g_ns_audio += audio_now() - t0;
         g_ax_frames++;
         // DSP finished the frame -> AX task resume callback
-        post_irq_front([](Ctx* ic) { guest_call(ic, G_AX_RESUME_CB, {}); });   // before any queued AI periods
+        post_irq_front([](Ctx* ic) {   // before any queued AI periods
+            const uint64_t t1 = audio_now();
+            guest_call(ic, G_AX_RESUME_CB, {});
+            g_ns_audio += audio_now() - t1;
+        });
     }
     if (g_mail.size() > 16) g_mail.clear();
 }

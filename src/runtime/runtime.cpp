@@ -379,6 +379,15 @@ static std::string exe_path(const char* argv0) {
     return argv0 ? argv0 : "";
 }
 
+#ifdef _WIN32
+// Ask hybrid-graphics laptops for the dedicated GPU (the NVIDIA and AMD drivers look for these
+// exports); otherwise Windows runs the game on the integrated one.
+extern "C" {
+__declspec(dllexport) DWORD NvOptimusEnablement = 1;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+#endif
+
 int main(int argc, char** argv) {
     // game data: argument, or a "game" folder next to / above the executable holding
     // main.dol, tmd.bin, ticket.bin and content/<index>.app (see tools/prepare_wad.py)

@@ -15,6 +15,7 @@
 #include <vector>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -123,6 +124,74 @@ static void watch_arm() {
     VirtualProtect(g_watch_page, 4096, PAGE_READONLY, &old);
     fprintf(g_log, "[watch] armed on %08X (value %u), exe at %p\n", addr, g_watch_old, (void*)GetModuleHandleA(nullptr));
 }
+#endif
+
+// ---------------------------------------------------------------- sampling profiler
+// SAMPLE_PROFILE=1: about 1000 times a second every registered guest thread is suspended and
+// its instruction pointer counted; every 10 s the hottest addresses are logged as
+// "[prof] rip=<addr> n=<count>" (map them to f_XXXXXXXX with nm on the exe).
+#ifdef _WIN32
+#include <algorithm>
+#include <map>
+#include <mutex>
+#include <thread>
+#include <chrono>
+static std::mutex g_prof_mx;
+static std::vector<HANDLE> g_prof_threads;
+void debug_register_thread() {
+    static const bool on = getenv("SAMPLE_PROFILE") != nullptr;
+    if (!on) return;
+    HANDLE h;
+    DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &h, 0, FALSE, DUPLICATE_SAME_ACCESS);
+    std::lock_guard<std::mutex> g(g_prof_mx);
+    g_prof_threads.push_back(h);
+    static bool started = false;
+    if (started) return;
+    started = true;
+    std::thread([] {
+        std::map<uint64_t, unsigned> hits;
+        auto last = std::chrono::steady_clock::now();
+        fprintf(g_log, "[prof] exe at %p\n", (void*)GetModuleHandleA(nullptr));
+        for (;;) {
+            Sleep(1);
+            std::vector<HANDLE> ths;
+            { std::lock_guard<std::mutex> g(g_prof_mx); ths = g_prof_threads; }
+            for (HANDLE h : ths) {
+                if (SuspendThread(h) == (DWORD)-1) continue;
+                CONTEXT ctx = {};
+                ctx.ContextFlags = CONTEXT_CONTROL;
+                if (GetThreadContext(h, &ctx)) hits[ctx.Rip]++;
+                ResumeThread(h);
+            }
+            if (std::chrono::steady_clock::now() - last > std::chrono::seconds(10)) {
+                last = std::chrono::steady_clock::now();
+                std::vector<std::pair<unsigned, uint64_t>> v;
+                for (auto& [rip, n] : hits) v.push_back({n, rip});
+                std::sort(v.rbegin(), v.rend());
+                for (size_t i = 0; i < v.size() && i < 400; i++) fprintf(g_log, "[prof] rip=%llx n=%u\n", (unsigned long long)v[i].second, v[i].first);
+                // totals per module: separates driver time from threads waiting in the OS
+                std::map<std::string, unsigned> mods;
+                for (auto& [n, rip] : v) {
+                    HMODULE m = nullptr;
+                    char name[MAX_PATH] = "?";
+                    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                           (LPCSTR)rip, &m) && m) {
+                        GetModuleFileNameA(m, name, sizeof name);
+                        const char* b = strrchr(name, '\\');
+                        if (b) memmove(name, b + 1, strlen(b));
+                    }
+                    mods[name] += n;
+                }
+                for (auto& [name, n] : mods) fprintf(g_log, "[prof] module %s n=%u\n", name.c_str(), n);
+                fprintf(g_log, "[prof] ---\n");
+                fflush(g_log);
+                hits.clear();
+            }
+        }
+    }).detach();
+}
+#else
+void debug_register_thread() {}
 #endif
 
 void debug_on_retrace(uint64_t vi) {

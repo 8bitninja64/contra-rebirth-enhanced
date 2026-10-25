@@ -4,3 +4,4 @@
 # also be in hle.txt. Regenerate src/gen after editing this file.
 VIWaitForRetrace        # frame_stats
 fn_80013F00             # skip_strap_screen (boot sequence state machine)
+fn_800DFC30             # widescreen: view rectangle getter (l,t,r,b) used by layer culling

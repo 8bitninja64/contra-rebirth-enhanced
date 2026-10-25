@@ -16,6 +16,11 @@ uint32_t mmio_peek(uint32_t a);
 static const int kFmtSize[8] = {1, 1, 2, 2, 4, 0, 0, 0};
 static const int kClrSize[8] = {2, 3, 4, 2, 3, 4, 0, 0};
 
+// Bytes the incomplete draw at the FIFO read position needs: the game writes the FIFO a
+// few bytes at a time, and re-parsing (and re-sizing vertices) after every write was the
+// hottest code in the runtime.
+static size_t g_fifo_wait = 0;
+
 int gx_vertex_size(int vat) {
     const uint32_t lo = g_gx.cp[0x50], hi = g_gx.cp[0x60];
     const uint32_t A = g_gx.cp[0x70 + vat], B = g_gx.cp[0x80 + vat], C = g_gx.cp[0x90 + vat];
@@ -131,7 +136,7 @@ static long parse_cmd(const uint8_t* p, size_t n, bool in_dl) {
                 uint32_t count = rd16(p + 1);
                 int vs = gx_vertex_size(vat);
                 size_t need = 3 + (size_t)count * vs;
-                if (n < need) return 0;
+                if (n < need) { if (!in_dl) g_fifo_wait = need; return 0; }
                 g_gx.stats.prims++;
                 g_gx.stats.verts += count;
                 gx_draw(op & 0xF8, vat, count, p + 3, vs);
@@ -148,6 +153,8 @@ void fifo_write(uint32_t v, int size) {
     else if (size == 2) { g_fifo.push_back(v >> 8); g_fifo.push_back(v); }
     else g_fifo.push_back(v);
     g_gx.stats.fifo_bytes += size;
+    if (g_fifo.size() - g_rd < g_fifo_wait) return;
+    g_fifo_wait = 0;
     for (;;) {
         long k = parse_cmd(g_fifo.data() + g_rd, g_fifo.size() - g_rd, false);
         if (k == 0) break;

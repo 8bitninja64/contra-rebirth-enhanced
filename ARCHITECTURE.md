@@ -131,4 +131,30 @@ supported build (sha1 `825fb4ec…`) are enabled enhancements started. `init()` 
 off, so toggling at run time is safe. State persists in the ini as `enh_<id> = 0/1`.
 
 Adding one: list the guest function in `src/hooks.txt`, regenerate (`tools/build.ps1` does it),
-add `runtime/enhancements/<id>.cpp` modeled on `frame_stats.cpp`.
+add `runtime/enhancements/<id>.cpp` modeled on `frame_stats.cpp`. Per-frame work goes through
+`enh_on_frame()` (the manager owns the `VIWaitForRetrace` hook). Every enhancement gets an
+On/Off row in the F1 menu automatically.
+
+## 11. Known game structures (found with the debug tools)
+
+| Address / path | Meaning |
+| --- | --- |
+| `[802E0138]` (`r13-0x5228`) | game state object, same object across stages |
+| `+0x0C/+0x10` f32 | camera / scroll position |
+| `+0x24` u32 | area within the stage (map sections) |
+| `+0x2C` / `+0x30` / `+0x3C` | P1 score / weapon (0 N, 1 S, 2 L, 3 H) / lives |
+| `+0x110` u8 | "no death": player hit test `fn_800492A0` only kills when 0 |
+| `+0x04` → player object | vtable `80213B88`; `+0x88` current state handler (member-function triple, `8004A030` on foot, `8004B360` dying); `+0xA8 & 1` killed; `+0xB8` respawn invulnerability timer |
+| `fn_80013F00` | boot sequence (strap screen, Konami logo) |
+| `fn_80111A70` | tile layer draw; culls against the view rectangle from `fn_800DFC30` |
+| Engines | `Engine1A … Engine5C` are stages/halves, plus `EngineDemo/Title/Select/Start/Over/Staff/Debug/Test` |
+
+Render pipeline in gameplay: playfield pass (viewport 320×240, ortho 2/320) → EFB copy 320×240
+to a texture → composite pass (640×480 viewport; ortho 854 wide in 16:9 mode, 640 in 4:3).
+
+## 12. Debug tools (`runtime/debug_tools.cpp`, environment variables)
+
+`MEMDUMP_EVERY/FROM/TO/AT`, `MEMDUMP_MEM2` (RAM snapshots, logged with VI and frame),
+`POKE=size:addr=val@from-to`, `WATCH=addr[+off...]` + `WATCH_FROM` (write watchpoint; logs host
+stacks, map with `nm`), `DRAWTRACE_TEX` / `DRAWTRACE_FRAME` (call stacks of draws),
+`NO_HOST_INPUT`, `AUTOPRESS`, `SHOT_EVERY`, `PRESENT_SHOT`, `FRAMELOG`, `ENH=id=1,...`.

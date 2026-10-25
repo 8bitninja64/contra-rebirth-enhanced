@@ -23,18 +23,37 @@
 #include <string>
 #include <algorithm>
 #include <atomic>
+#ifdef _WIN32
+#include <windows.h>   // RtlCaptureStackBackTrace (DRAWTRACE_TEX)
+#endif
 
 static const int EFB_W = 640, EFB_H = 528;   // logical EFB size
+
+// ---------------------------------------------------------------- true widescreen (render side)
+// Contra draws its playfield with a 320x240 ortho/viewport, copies that EFB region to a
+// texture and, in 16:9 mode, draws the texture pillarboxed on an 854-wide canvas. With
+// g_ws_on (enhancements/widescreen.cpp) the playfield pass is widened around the same
+// camera centre to 426.67 units, the copy takes the wider region and the composite quad
+// fills the whole 16:9 canvas. What the game draws in the extra area is up to its culling.
+bool g_ws_on = false;
+static const float kWsW = 320.f * (16.f / 9.f) / (4.f / 3.f);   // 426.67: playfield width at 16:9
+static bool g_ws_pass = false;      // the current draw setup is the (widened) playfield pass
+static uint32_t g_ws_copy = 0;      // texture address the playfield was copied to this frame
+static uint32_t texmap_addr(int m);
 static int RS = 1, PW = 640, PH = 528;           // render scale and physical EFB size
 static bool g_ok = false, g_tried = false;
 static GLuint g_fbo, g_efb_color, g_efb_depth, g_vao, g_vbo, g_vs;
+static const int kVboRing = 8;
+static GLuint g_vaos[kVboRing], g_vbos[kVboRing];
+static int g_vbo_next = 0;
+static void next_vbo() { g_vbo_next = (g_vbo_next + 1) % kVboRing; g_vao = g_vaos[g_vbo_next]; g_vbo = g_vbos[g_vbo_next]; }
 static GLuint g_xfb_tex;            // last presented frame
 static int g_xfb_w = 640, g_xfb_h = 480;
 uint64_t g_frame = 0;   // presented frames (screenshot numbering); also read by debug_tools.cpp
 static uint64_t g_tex_epoch = 1;   // bumps each frame and on TLUT loads: texture cache re-validates
 char g_perf_text[128] = "";
 #include <chrono>
-static uint64_t g_ns_draw = 0, g_ns_copy = 0;
+uint64_t g_ns_draw = 0, g_ns_copy = 0;   // host time in GX draws / EFB copies (+present); never reset
 static uint64_t g_batches = 0, g_draw_calls_in = 0;
 static inline uint64_t now_ns_r();
 struct ScopeNs { uint64_t& acc; uint64_t t; ScopeNs(uint64_t& a) : acc(a), t(now_ns_r()) {} ~ScopeNs() { acc += now_ns_r() - t; } };
@@ -75,10 +94,12 @@ static const char* kVS =
 struct Prog { GLuint p; GLint u_reg, u_konst, u_aref, u_tex; };
 static std::unordered_map<uint64_t, Prog> g_progs;
 
+uint64_t g_n_progs = 0, g_n_tex_uploads = 0;   // shader programs built / textures (re)uploaded (frame_stats)
 static Prog& get_prog() {
     uint64_t key = tev_shader_key(g_gx.bp);
     auto it = g_progs.find(key);
     if (it != g_progs.end()) return it->second;
+    g_n_progs++;
     Prog pr;
     pr.p = glCreateProgram();
     glAttachShader(pr.p, g_vs);
@@ -166,15 +187,20 @@ static bool ensure_gl() {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glEnable(GL_DEPTH_CLAMP);
     g_vs = compile(GL_VERTEX_SHADER, kVS);
-    glGenVertexArrays(1, &g_vao);
-    glBindVertexArray(g_vao);
-    glGenBuffers(1, &g_vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
-    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void*)offsetof(Vtx, pos));
-    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void*)offsetof(Vtx, c0));
-    glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void*)offsetof(Vtx, c1));
-    for (int i = 0; i < 8; i++) glVertexAttribPointer(3 + i, 3, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void*)(offsetof(Vtx, tc) + 12 * i));
-    for (int i = 0; i < 11; i++) glEnableVertexAttribArray(i);
+    // a ring of vertex buffers (each with its VAO): re-filling the one buffer the GPU may
+    // still be reading made the driver wait now and then
+    for (int r = 0; r < kVboRing; r++) {
+        glGenVertexArrays(1, &g_vaos[r]);
+        glBindVertexArray(g_vaos[r]);
+        glGenBuffers(1, &g_vbos[r]);
+        glBindBuffer(GL_ARRAY_BUFFER, g_vbos[r]);
+        glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void*)offsetof(Vtx, pos));
+        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void*)offsetof(Vtx, c0));
+        glVertexAttribPointer(2, 4, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void*)offsetof(Vtx, c1));
+        for (int i = 0; i < 8; i++) glVertexAttribPointer(3 + i, 3, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void*)(offsetof(Vtx, tc) + 12 * i));
+        for (int i = 0; i < 11; i++) glEnableVertexAttribArray(i);
+    }
+    g_vao = g_vaos[0]; g_vbo = g_vbos[0];
     glGenTextures(1, &g_xfb_tex);
     g_ok = true;
     return true;
@@ -273,6 +299,15 @@ static void setup_vertex_pipeline(int vat) {
     for (int i = 0; i < 6; i++) d.P[i] = xff(0x1020 + i);
     d.ortho = g_gx.xf_reg[0x26] != 0;
     float wd = xff(0x101A), ht = xff(0x101B), zr = xff(0x101C), xo = xff(0x101D), yo = xff(0x101E), fz = xff(0x101F);
+    g_ws_pass = false;
+    if (g_ws_on && d.ortho && std::fabs(2 * wd - 320) < 0.5f && std::fabs(2 * ht + 240) < 0.5f &&
+        std::fabs(xo - 342 - 160) < 0.5f && std::fabs(d.P[0] - 2.f / 320) < 1e-5f) {
+        const float c = -d.P[1] / d.P[0];   // playfield x at the screen centre (camera)
+        d.P[0] = 2.f / kWsW;
+        d.P[1] = -c * d.P[0];
+        wd = kWsW / 2; xo = 342 + kWsW / 2;
+        g_ws_pass = true;
+    }
     const float S = 16777216.f;
     d.vx0 = (xo - 342.f) / (EFB_W / 2.f) - 1.f; d.vx1 = wd / (EFB_W / 2.f);
     d.vy0 = 1.f - (yo - 342.f) / (EFB_H / 2.f); d.vy1 = -(ht / (EFB_H / 2.f));
@@ -536,6 +571,11 @@ static GLuint get_sampler(uint32_t mode0, uint32_t mode1, int levels) {
     return smp;
 }
 
+static uint32_t texmap_addr(int m) {
+    uint32_t base = m < 4 ? 0x80 + m : 0xA0 + (m - 4);
+    return ((g_gx.bp[base + 0x14] & 0xFFFFFF) << 5) | 0x80000000u;
+}
+
 static void bind_texmap(int m) {
     uint32_t base = m < 4 ? 0x80 + m : 0xA0 + (m - 4);
     uint32_t mode0 = g_gx.bp[base], mode1 = g_gx.bp[base + 4], img0 = g_gx.bp[base + 8], img3 = g_gx.bp[base + 0x14], tlut = g_gx.bp[base + 0x18];
@@ -603,6 +643,7 @@ static void bind_texmap(int m) {
             uint64_t hsh = hash_mem(addr, sz);
             if (fmt >= 8 && fmt <= 10) for (int i = 0; i < 512; i++) hsh = (hsh ^ g_tmem[(tlut_addr + i) & 0xFFFFF]) * 1099511628211ull;
             if (!e.tex || hsh != e.hash || e.gen != want_gen) {
+                g_n_tex_uploads++;
                 std::vector<uint32_t> px;
                 if (!e.tex) glGenTextures(1, &e.tex);
                 glBindTexture(GL_TEXTURE_2D, e.tex);
@@ -681,6 +722,7 @@ static void apply_state() {
     int xoff = (bp[0x59] & 1023) * 2, yoff = ((bp[0x59] >> 10) & 1023) * 2;
     int x0 = ((bp[0x20] >> 12) & 2047) - xoff, y0 = (bp[0x20] & 2047) - yoff;
     int x1 = ((bp[0x21] >> 12) & 2047) - xoff + 1, y1 = (bp[0x21] & 2047) - yoff + 1;
+    if (g_ws_pass && x0 == 0 && x1 == 320) x1 = (int)std::ceil(kWsW);   // widened playfield
     x0 = std::max(0, x0); y0 = std::max(0, y0); x1 = std::min(EFB_W, x1); y1 = std::min(EFB_H, y1);
     glEnable(GL_SCISSOR_TEST);
     glScissor(x0 * RS, (EFB_H - y1) * RS, std::max(0, x1 - x0) * RS, std::max(0, y1 - y0) * RS);
@@ -808,6 +850,10 @@ static void efb_copy_impl(uint32_t val) {
     int w = (bp[0x4A] & 1023) + 1, h = ((bp[0x4A] >> 10) & 1023) + 1;
     uint32_t dst = ((bp[0x4B] & 0xFFFFFF) << 5) | 0x80000000u;
     bool to_xfb = (val >> 14) & 1, clear = (val >> 11) & 1, half = (val >> 9) & 1;
+    if (g_ws_on && !to_xfb && sx == 0 && sy == 0 && w == 320 && h == 240) {   // the playfield: take the wide region
+        w = (int)std::ceil(kWsW);
+        g_ws_copy = dst;
+    }
     g_gx.stats.copies++;
     GLuint src_fbo = efb_read_fbo();
     if (to_xfb) {
@@ -829,7 +875,7 @@ static void efb_copy_impl(uint32_t val) {
             static bool perf = getenv("PERF") != nullptr;
 #endif
             extern uint64_t g_vi_count, g_ax_frames;
-            static uint64_t vi0 = 0, ax0 = 0;
+            static uint64_t vi0 = 0, ax0 = 0, nd0 = 0, nc0 = 0;
             uint64_t t = now_ns_r();
             static uint64_t pt0 = t, pf0 = 0;
             extern std::atomic<uint64_t> g_idle_ns;
@@ -851,11 +897,11 @@ static void efb_copy_impl(uint32_t val) {
                 { extern std::atomic<uint64_t> g_vi_dropped; static uint64_t v0 = 0; uint64_t v = g_vi_dropped.load();
                   fprintf(g_log, "[vi] retraces dropped %llu\n", (unsigned long long)(v - v0)); v0 = v; }
                 fprintf(g_log, "[perf] %.1f fps | VI %.1f/s (want 59.9) | audio %.0f/s (want 333) | GPU draw %.0f%%, copies %.0f%% of time | %.0f draws -> %.0f GL calls per frame\n",
-                        (g_frame - f0) / sec, (g_vi_count - vi0) / sec, (g_ax_frames - ax0) / sec, g_ns_draw / 1e7 / sec, g_ns_copy / 1e7 / sec,
+                        (g_frame - f0) / sec, (g_vi_count - vi0) / sec, (g_ax_frames - ax0) / sec, (g_ns_draw - nd0) / 1e7 / sec, (g_ns_copy - nc0) / 1e7 / sec,
                         (double)g_draw_calls_in / std::max<uint64_t>(1, g_frame - f0), (double)g_batches / std::max<uint64_t>(1, g_frame - f0));
                 g_draw_calls_in = g_batches = 0;
                 fflush(g_log);
-                t0 = t; f0 = g_frame; g_ns_draw = g_ns_copy = 0; vi0 = g_vi_count; ax0 = g_ax_frames;
+                t0 = t; f0 = g_frame; nd0 = g_ns_draw; nc0 = g_ns_copy; vi0 = g_vi_count; ax0 = g_ax_frames;
             }
         }
         if (g_gxdbg && g_frame % 60 == 0) fprintf(g_log, "[frame %llu] draws %d copy %dx%d%s\n", (unsigned long long)g_frame, g_frame_draws, w, h, g_frame_tex.c_str());
@@ -888,6 +934,7 @@ static void efb_copy_impl(uint32_t val) {
             save_ppm(path, px, w * RS, h * RS);
         }
         gl_platform_present(g_xfb_tex, w * RS, h * RS);
+        g_ws_copy = 0;   // the composite stretch applies only to a frame that made a widened copy
         if (g_cfg.resolution_scale != RS || std::max(1, g_cfg.msaa) != g_cfg_msaa_seen) { g_cfg_msaa_seen = g_cfg.msaa; resize_efb(g_cfg.resolution_scale); }
         glBindFramebuffer(GL_FRAMEBUFFER, g_fbo);
     } else {
@@ -966,6 +1013,7 @@ static bool g_batch_open = false;
 
 void gx_flush() {
     if (g_batch.empty()) { g_batch_open = false; return; }
+    next_vbo();
     glBindVertexArray(g_vao);
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
     glBufferData(GL_ARRAY_BUFFER, g_batch.size() * sizeof(Vtx), g_batch.data(), GL_STREAM_DRAW);
@@ -995,6 +1043,25 @@ static void setup_draw_state(uint8_t prim, uint32_t count, const std::vector<Vtx
         if ((order >> 6) & 1) used |= 1u << (order & 7);
     }
     for (int m = 0; m < 8; m++) if (used & (1u << m)) bind_texmap(m);
+#ifdef _WIN32
+    {   // DRAWTRACE_TEX=<addr>: log the host call stack of draws using that texture (RE: who draws it)
+        // DRAWTRACE_FRAME=<n>: the same for every textured draw of frame n
+        static uint32_t trace_tex = getenv("DRAWTRACE_TEX") ? (uint32_t)strtoul(getenv("DRAWTRACE_TEX"), nullptr, 16) : 0;
+        static long trace_frame = getenv("DRAWTRACE_FRAME") ? atol(getenv("DRAWTRACE_FRAME")) : -1;
+        static int traced = 0;
+        const bool all = (long)g_frame == trace_frame;
+        if ((trace_tex && traced < 3) || all)
+            for (int m = 0; m < 8; m++)
+                if ((used & (1u << m)) && (all || texmap_addr(m) == trace_tex)) {
+                    void* fr[62];
+                    USHORT n = RtlCaptureStackBackTrace(0, all ? 24 : 62, fr, nullptr);
+                    fprintf(g_log, "[drawtrace] exe at %p tex %08X\n", (void*)GetModuleHandleA(nullptr), texmap_addr(m));
+                    for (USHORT k = 0; k < n; k++) fprintf(g_log, "[drawtrace]   stack rip=%p\n", fr[k]);
+                    traced++;
+                    break;
+                }
+    }
+#endif
     static uint32_t dbg_addr = getenv("TEXDUMP") ? (uint32_t)strtoul(getenv("TEXDUMP"), nullptr, 16) : 0;
     if (dbg_addr && (used & 1) && ((((g_gx.bp[0x94] & 0xFFFFFF) << 5) | 0x80000000u) == dbg_addr)) {
         static int n = 0;
@@ -1027,12 +1094,42 @@ void gx_draw(uint8_t prim, int vat, uint32_t count, const uint8_t* data, int vsi
         p = start + vsize;
         transform(r, verts[i]);
     }
+    const bool ws_composite = g_ws_on && g_ws_copy && g_ds.ortho && std::fabs(g_ds.P[0] - 2.f / 854) < 2e-6f;
+    if (g_ws_pass || ws_composite) {
+        // full-screen overlays (fades, alarm tints, flashes) cover exactly the old 4:3 area,
+        // which lands on clip x = +-0.75 in the widened pass and on the 16:9 canvas alike:
+        // stretch them to +-1
+        const float edge = 320.f / kWsW;
+        bool lo = false, hi = false, only_edges = true;
+        for (uint32_t i = 0; i < count && only_edges; i++) {
+            float x = verts[i].pos[0] / verts[i].pos[3];
+            if (std::fabs(x + edge) < 1e-3f) lo = true;
+            else if (std::fabs(x - edge) < 1e-3f) hi = true;
+            else only_edges = false;
+        }
+        if (only_edges && lo && hi)
+            for (uint32_t i = 0; i < count; i++) verts[i].pos[0] /= edge;
+    }
+    if (ws_composite) {
+        // the quad showing the playfield copy (stretched to the canvas just above) also reads
+        // the wider source region
+        int nstages = ((g_gx.bp[0x00] >> 10) & 15) + 1;
+        bool uses_copy = false;
+        for (int s = 0; s < nstages; s++) {
+            uint32_t order = g_gx.bp[0x28 + s / 2] >> ((s & 1) * 12);
+            if (((order >> 6) & 1) && texmap_addr(order & 7) == g_ws_copy) uses_copy = true;
+        }
+        if (uses_copy)
+            for (uint32_t i = 0; i < count; i++)
+                for (int t = 0; t < 8; t++) verts[i].tc[t][0] *= kWsW / 320.f;
+    }
     bool tris = prim == 0x80 || prim == 0x90 || prim == 0x98 || prim == 0xA0;
     if (!tris) {
         // lines / points: drawn on their own
         gx_flush();
         setup_draw_state(prim, count, verts);
         GLenum mode = prim == 0xA8 ? GL_LINES : prim == 0xB0 ? GL_LINE_STRIP : GL_POINTS;
+        next_vbo();
         glBindVertexArray(g_vao);
         glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
         glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(Vtx), verts.data(), GL_STREAM_DRAW);
