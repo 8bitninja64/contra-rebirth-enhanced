@@ -24,6 +24,7 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <vector>
 
 static SDL_Window* g_win = nullptr;
 static SDL_GLContext g_glc = nullptr;
@@ -41,6 +42,53 @@ static std::condition_variable g_pcv;
 static void present_thread();
 static thread_local bool t_current = false;
 
+// Presentation settings as plain ints for the present thread (the config strings are written
+// on the emulation thread).
+enum { SCALE_FIT, SCALE_INTEGER, SCALE_STRETCH };
+enum { FILTER_SMOOTH, FILTER_SHARP, FILTER_NEAREST };
+static std::atomic<int> g_scale_mode{SCALE_FIT}, g_filter_mode{FILTER_SMOOTH};
+static void update_present_modes() {
+    g_scale_mode = g_cfg.scaling == "integer" ? SCALE_INTEGER : g_cfg.scaling == "stretch" ? SCALE_STRETCH : SCALE_FIT;
+    g_filter_mode = g_cfg.filter == "sharp" ? FILTER_SHARP : g_cfg.filter == "nearest" ? FILTER_NEAREST : FILTER_SMOOTH;
+}
+
+static bool parse_resolution(int* w, int* h) {
+    int rw, rh;
+    if (g_cfg.resolution == "native") {
+        SDL_DisplayMode m;
+        if (SDL_GetDesktopDisplayMode(g_win ? std::max(0, SDL_GetWindowDisplayIndex(g_win)) : 0, &m) != 0) return false;
+        *w = m.w; *h = m.h;
+        return true;
+    }
+    if (sscanf(g_cfg.resolution.c_str(), "%dx%d", &rw, &rh) != 2 || rw < 320 || rh < 240) return false;
+    *w = rw; *h = rh;
+    return true;
+}
+
+// Windowed / borderless (desktop resolution) / exclusive fullscreen at the configured resolution.
+static void apply_display() {
+    update_present_modes();
+    if (!g_cfg.fullscreen) {
+        SDL_SetWindowFullscreen(g_win, 0);
+        int w, h;
+        if (parse_resolution(&w, &h)) SDL_SetWindowSize(g_win, w, h);
+        return;
+    }
+    if (g_cfg.fullscreen_mode == "exclusive") {
+        int di = std::max(0, SDL_GetWindowDisplayIndex(g_win));
+        SDL_DisplayMode want = {}, got = {};
+        SDL_GetDesktopDisplayMode(di, &want);
+        parse_resolution(&want.w, &want.h);
+        if (SDL_GetClosestDisplayMode(di, &want, &got)) SDL_SetWindowDisplayMode(g_win, &got);
+        if (SDL_SetWindowFullscreen(g_win, SDL_WINDOW_FULLSCREEN) == 0) {
+            fprintf(stderr, "[sdl] exclusive fullscreen %dx%d @ %d Hz\n", got.w, got.h, got.refresh_rate);
+            return;
+        }
+        fprintf(stderr, "[sdl] exclusive fullscreen failed (%s), using borderless\n", SDL_GetError());
+    }
+    SDL_SetWindowFullscreen(g_win, SDL_WINDOW_FULLSCREEN_DESKTOP);
+}
+
 bool gl_platform_init(int w, int h) {
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) != 0) {
         fprintf(stderr, "[sdl] init failed: %s\n", SDL_GetError());
@@ -52,11 +100,12 @@ bool gl_platform_init(int w, int h) {
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     int scale = g_cfg.window_scale;
     int ww = (g_cfg.widescreen ? 854 : 640) * scale, wh = 480 * scale;
+    parse_resolution(&ww, &wh);
     Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
-    if (g_cfg.fullscreen) flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
     g_win = SDL_CreateWindow(GAME_NAME " (native)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                              ww, wh, flags);
     if (!g_win) { fprintf(stderr, "[sdl] window failed: %s\n", SDL_GetError()); return false; }
+    apply_display();
     g_present_ctx = SDL_GL_CreateContext(g_win);              // presenter
     if (!g_present_ctx) { fprintf(stderr, "[sdl] GL context failed: %s\n", SDL_GetError()); return false; }
     SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
@@ -171,7 +220,8 @@ static void update_input() {
 static std::atomic<bool> g_vsync_dirty{false};
 
 static void apply_action(int a) {
-    if (a == OV_FULLSCREEN) SDL_SetWindowFullscreen(g_win, g_cfg.fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+    if (a == OV_FULLSCREEN || a == OV_DISPLAY) apply_display();
+    else if (a == OV_PRESENT) update_present_modes();
     else if (a == OV_VSYNC) g_vsync_dirty = true;
     else if (a == OV_QUIT) exit(0);
 }
@@ -269,15 +319,24 @@ void gl_platform_present(unsigned tex, int w, int h) {
 // Final scaling of the frame to the window. Downscaling (internal resolution above the
 // window size) averages a grid of bilinear taps across each window pixel's footprint
 // so the extra resolution becomes anti-aliasing instead of shimmer; upscaling is bilinear.
+// "sharp" keeps texels square-edged and only blends across the one output pixel that
+// straddles two texels (sharp bilinear); "nearest" reads raw texels.
 static GLuint g_scale_prog = 0, g_scale_vao = 0;
-static GLint g_u_src = -1, g_u_scale = -1, g_u_rect = -1;
+static GLint g_u_src = -1, g_u_scale = -1, g_u_rect = -1, g_u_filter = -1;
 static void init_scaler() {
     const char* vs = "#version 330 core\nuniform vec4 u_rect; out vec2 uv;\n"
         "void main(){ vec2 p = vec2(gl_VertexID & 1, gl_VertexID >> 1); uv = vec2(p.x, p.y);\n"
         " vec2 q = u_rect.xy + p * u_rect.zw; gl_Position = vec4(q.x * 2.0 - 1.0, 1.0 - q.y * 2.0, 0.0, 1.0); }\n";
-    const char* fs = "#version 330 core\nin vec2 uv; uniform sampler2D u_src; uniform vec2 u_scale; out vec4 o;\n"
+    const char* fs = "#version 330 core\nin vec2 uv; uniform sampler2D u_src; uniform vec2 u_scale; uniform int u_filter; out vec4 o;\n"
         "void main(){\n"
         " vec2 ts = vec2(textureSize(u_src, 0));\n"
+        " if (u_filter == 2) { o = vec4(texelFetch(u_src, ivec2(min(uv * ts, ts - 1.0)), 0).rgb, 1.0); return; }\n"
+        " if (u_filter == 1 && u_scale.x <= 1.0 && u_scale.y <= 1.0) {\n"
+        "  vec2 pre = max(floor(1.0 / u_scale), vec2(1.0));\n"         // whole output pixels per texel
+        "  vec2 t = uv * ts, c = fract(t) - 0.5, r = 0.5 - 0.5 / pre;\n"
+        "  vec2 f = (c - clamp(c, -r, r)) * pre + 0.5;\n"
+        "  o = vec4(texture(u_src, (floor(t) + f) / ts).rgb, 1.0); return;\n"
+        " }\n"
         " vec2 n = clamp(ceil(u_scale), vec2(1.0), vec2(4.0));\n"   // taps per axis
         " vec2 fp = u_scale / ts;\n"                                  // footprint in uv
         " vec4 acc = vec4(0.0);\n"
@@ -295,6 +354,7 @@ static void init_scaler() {
     g_u_src = glGetUniformLocation(g_scale_prog, "u_src");
     g_u_scale = glGetUniformLocation(g_scale_prog, "u_scale");
     g_u_rect = glGetUniformLocation(g_scale_prog, "u_rect");
+    g_u_filter = glGetUniformLocation(g_scale_prog, "u_filter");
     glGenVertexArrays(1, &g_scale_vao);
 }
 
@@ -317,9 +377,17 @@ static void present_thread() {
         Slot& sl = g_slots[s];
         int ww, wh;
         SDL_GL_GetDrawableSize(g_win, &ww, &wh);
+        // picture rectangle: the game's aspect (4:3, or 16:9 when it is told the TV is widescreen)
         const int an = g_cfg.widescreen ? 16 : 4, ad = g_cfg.widescreen ? 9 : 3;
+        const int smode = g_scale_mode.load();
         int dw = ww, dh = ww * ad / an;
         if (dh > wh) { dh = wh; dw = wh * an / ad; }
+        if (smode == SCALE_INTEGER && wh >= 240) {
+            // whole multiples of the 240-line playfield, so every source line is the same height
+            dh = std::min(wh, (wh / 240) * 240);
+            dw = dh * an / ad;
+            while (dw > ww && dh > 240) { dh -= 240; dw = dh * an / ad; }
+        } else if (smode == SCALE_STRETCH) { dw = ww; dh = wh; }
         int dx = (ww - dw) / 2, dy = (wh - dh) / 2;
         glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
         glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sl.tex, 0);
@@ -336,10 +404,26 @@ static void present_thread() {
         glBindTexture(GL_TEXTURE_2D, sl.tex);
         glUniform1i(g_u_src, 0);
         glUniform2f(g_u_scale, (float)sl.w / dw, (float)sl.h / dh);
+        glUniform1i(g_u_filter, g_filter_mode.load());
         glUniform4f(g_u_rect, (float)dx / ww, (float)dy / wh, (float)dw / ww, (float)dh / wh);
         glBindVertexArray(g_scale_vao);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         overlay_draw(ww, wh);
+        // debug: PRESENT_SHOT=<file.ppm> PRESENT_SHOT_AT=<n> saves the n-th presented window image
+        static const char* pshot = getenv("PRESENT_SHOT");
+        static long pshot_at = getenv("PRESENT_SHOT_AT") ? atol(getenv("PRESENT_SHOT_AT")) : 600;
+        static long presented = 0;
+        if (pshot && ++presented == pshot_at) {
+            std::vector<uint8_t> px((size_t)ww * wh * 3);
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            glReadPixels(0, 0, ww, wh, GL_RGB, GL_UNSIGNED_BYTE, px.data());
+            if (FILE* f = fopen(pshot, "wb")) {
+                fprintf(f, "P6\n%d %d\n255\n", ww, wh);
+                for (int y = wh - 1; y >= 0; y--) fwrite(&px[(size_t)y * ww * 3], 1, (size_t)ww * 3, f);
+                fclose(f);
+                fprintf(stderr, "[sdl] window %dx%d saved to %s\n", ww, wh, pshot);
+            }
+        }
         if (g_vsync_dirty.exchange(false)) {
             if (g_cfg.vsync) { if (SDL_GL_SetSwapInterval(-1) != 0) SDL_GL_SetSwapInterval(1); }
             else SDL_GL_SetSwapInterval(0);

@@ -45,6 +45,11 @@ static const std::vector<Item>& items() {
         {"Texture smoothing", {"Off (original)", "On (trilinear)"}, "Mipmaps: removes shimmer on distant textures."},
         {"Game speed", {"Normal", "2x", "3x", "4x", "5x", "6x", "7x", "8x"}, "Fast-forward. Hold Tab or click the right stick for a burst."},
         {"Anisotropic filter", {"Off", "2x", "4x", "8x", "16x"}, "Sharper floors and walls seen at an angle."},
+        {"Fullscreen mode", {"Borderless", "Exclusive"}, "Exclusive switches the display to the output resolution."},
+        {"Output resolution", {"Auto", "1280x720", "1920x1080", "2560x1440", "3840x2160", "Native (desktop)"},
+         "Window size / exclusive mode. Not the internal rendering resolution."},
+        {"Scaling", {"Fit (keep aspect)", "Integer", "Stretch"}, "Integer: whole multiples of the game's 240 lines."},
+        {"Filter", {"Smooth", "Sharp", "Nearest"}, "Sharp: crisp pixels without uneven-pixel shimmer."},
         {"Close menu", {}, nullptr},
         {"Quit game", {}, nullptr},
     };
@@ -63,6 +68,15 @@ static int get_value(int i) {
         case 8: return g_cfg.smooth_textures ? 1 : 0;
         case 9: return std::max(1, std::min(8, g_cfg.speed)) - 1;
         case 10: return g_cfg.anisotropy >= 16 ? 4 : g_cfg.anisotropy >= 8 ? 3 : g_cfg.anisotropy >= 4 ? 2 : g_cfg.anisotropy >= 2 ? 1 : 0;
+        case 11: return g_cfg.fullscreen_mode == "exclusive" ? 1 : 0;
+        case 12: {
+            const auto& o = items()[12].opts;
+            if (g_cfg.resolution == "native") return 5;
+            for (int k = 1; k < 5; k++) if (g_cfg.resolution == o[k]) return k;
+            return 0;   // auto, or a custom size from the .ini (shown as Auto until changed here)
+        }
+        case 13: return g_cfg.scaling == "integer" ? 1 : g_cfg.scaling == "stretch" ? 2 : 0;
+        case 14: return g_cfg.filter == "sharp" ? 1 : g_cfg.filter == "nearest" ? 2 : 0;
     }
     return 0;
 }
@@ -79,6 +93,10 @@ static void set_value(int i, int v) {
         case 8: g_cfg.smooth_textures = v; break;
         case 9: g_cfg.speed = v + 1; break;
         case 10: g_cfg.anisotropy = v ? 1 << v : 1; break;
+        case 11: g_cfg.fullscreen_mode = v ? "exclusive" : "borderless"; break;
+        case 12: g_cfg.resolution = v == 0 ? "auto" : v == 5 ? "native" : items()[12].opts[v]; break;
+        case 13: g_cfg.scaling = v == 1 ? "integer" : v == 2 ? "stretch" : "fit"; break;
+        case 14: g_cfg.filter = v == 1 ? "sharp" : v == 2 ? "nearest" : "smooth"; break;
     }
     config_save();
 }
@@ -115,6 +133,8 @@ int overlay_input(int key) {
         set_value(g_sel, v);
         if (g_sel == 3) return OV_FULLSCREEN;
         if (g_sel == 2) return OV_VSYNC;
+        if (g_sel == 11 || g_sel == 12) return OV_DISPLAY;
+        if (g_sel == 13 || g_sel == 14) return OV_PRESENT;
     }
     return OV_NONE;
 }

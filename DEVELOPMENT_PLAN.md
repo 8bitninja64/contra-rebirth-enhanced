@@ -17,18 +17,26 @@ verified in play; **todo**.
 
 ## Phase 3 — Windows
 - done: native MSYS2 MinGW-w64 (GCC, posix threads) build; `tools/build.ps1` one-command build.
-- todo: interactive verification — boot, video, audio by ear, keyboard + pad, save/load, stages 1–3+.
+- done (scripted: AUTOPRESS + screenshots + WAV capture): boot, health/Konami screens, save creation
+  (`nand/.../bak000`, `banner.bin`), save read on the next launch, title, story, character select,
+  Stage 1 movement/jump/shoot; audio continuous in real time; ~58–60 fps on an RTX 3070 laptop.
+- todo (needs a person): audio by ear, real keyboard and controller play, Stages 2+.
 
 ## Phase 4 — Linux / SteamOS
 - done: interactive SDL builds no longer self-terminate after 15 s (headless-test `alarm`).
-- todo: native SDL build (`-DUSE_SDL=ON`), tested on desktop Linux (WSLg first), then Steam Deck
-  Gaming Mode. Launch script, then AppImage.
+- done: native SDL build (`-DUSE_SDL=ON`) compiles and runs windowed under WSLg (Ubuntu 26.04):
+  boots to the intro, reads the save, game logic at 60 VI/s, audio without underruns.
+- done: `tools/contrarebirth.sh` launcher.
+- todo: real Linux desktop and Steam Deck Gaming Mode (WSLg presents through D3D12 at ~22 fps,
+  which says nothing about real hardware); bundle SDL2; AppImage.
 
 ## Phase 5 — graphics
 Order (each step verified before the next):
-1. Output-side options in the presenter only (no game changes): aspect 4:3/16:9/16:10/21:9
-   presentation rectangle, scaling modes (integer, nearest, linear, aspect-fit, stretch),
-   display mode (windowed / borderless / exclusive), resolution list + native + custom, vsync.
+1. Output-side options in the presenter only (no game changes).
+   - done (verified by window captures at 1000×700): scaling fit / integer / stretch, filters
+     smooth / sharp / nearest, resolution auto / native / WxH for the window.
+   - built, untested: exclusive fullscreen at a chosen resolution (needs a person at the screen).
+   - 16:10 / 21:9 only make sense after step 2; the game's picture is 4:3 or pillarboxed 16:9.
 2. True widescreen investigation: the 2D playfield is 320×240 rendered into the EFB then
    copied to a 512×256 texture. Find the M2 engine camera/scroll width, layer culling and spawn
    bounds; widen the copy/projection. Document every glitch; 4:3 stays the default fallback.
@@ -36,9 +44,10 @@ Order (each step verified before the next):
    interpolation in game code and is out of scope unless a safe path is found.
 
 ## Phase 6 — enhancement system
-- `src/hooks.txt` → generator weaves a runtime-switchable hook prologue into listed functions.
-- `src/runtime/enhancements/`: manager (id, description, enabled, config, DOL-hash compatibility,
-  init with error handling, logging) + one file per patch.
+- built: `src/hooks.txt` → the generator keeps the original as `o_X` and routes `f_X` through a hook slot.
+- built: `src/runtime/enhancements/` manager (id, description, default, init, active flag, DOL sha1
+  check, `enh_<id>` ini keys, logging) + `frame_stats` diagnostic enhancement as the example.
+- todo: settings-menu page for enhancements (Phase 7).
 
 ## Phase 7 — settings menu
 Extend `overlay.cpp` into Graphics / Controls / Audio / Enhancements / System pages, keyboard and

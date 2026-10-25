@@ -16,12 +16,17 @@ static void set(const std::string& k, const std::string& v) {
     else if (k == "widescreen") g_cfg.widescreen = b();
     else if (k == "fullscreen") g_cfg.fullscreen = b();
     else if (k == "window_scale") g_cfg.window_scale = std::max(1, atoi(v.c_str()));
+    else if (k == "fullscreen_mode") g_cfg.fullscreen_mode = v == "exclusive" ? "exclusive" : "borderless";
+    else if (k == "resolution") { int w = 0, h = 0; g_cfg.resolution = v == "native" || (sscanf(v.c_str(), "%dx%d", &w, &h) == 2 && w >= 320 && h >= 240) ? v : "auto"; }
+    else if (k == "scaling") g_cfg.scaling = v == "integer" || v == "stretch" ? v : "fit";
+    else if (k == "filter") g_cfg.filter = v == "sharp" || v == "nearest" ? v : "smooth";
     else if (k == "controls") g_cfg.controls = v;
     else if (k == "show_perf") g_cfg.show_perf = b();
     else if (k == "anisotropy") { int a = atoi(v.c_str()); g_cfg.anisotropy = a >= 16 ? 16 : a >= 8 ? 8 : a >= 4 ? 4 : a >= 2 ? 2 : 1; }
     else if (k == "swap_ab_xy") g_cfg.swap_ab_xy = b();
     else if (k == "speed") { int a = atoi(v.c_str()); g_cfg.speed = a < 1 ? 1 : a > 8 ? 8 : a; }
     else if (k == "smooth_textures") g_cfg.smooth_textures = b();
+    else if (k.compare(0, 4, "enh_") == 0 && k.size() > 4) g_cfg.enh[k.substr(4)] = b();
     else if (k == "msaa") { int a = atoi(v.c_str()); g_cfg.msaa = a >= 8 ? 8 : a >= 4 ? 4 : a >= 2 ? 2 : 1; }
 }
 
@@ -52,7 +57,8 @@ void config_load(const char* exe_path) {
         fclose(f);
     }
     const char* keys[] = {"resolution_scale", "vsync", "widescreen", "fullscreen", "window_scale", "controls", "show_perf",
-                          "anisotropy", "smooth_textures", "msaa", "speed", "swap_ab_xy"};
+                          "anisotropy", "smooth_textures", "msaa", "speed", "swap_ab_xy",
+                          "fullscreen_mode", "resolution", "scaling", "filter"};
     for (const char* k : keys) {
         std::string env = k;
         std::transform(env.begin(), env.end(), env.begin(), ::toupper);
@@ -75,7 +81,18 @@ void config_save() {
         "; Wait for the monitor refresh when presenting (smoother cut-scenes)\n"
         "vsync = %d\n"
         "fullscreen = %d\n"
+        "; Fullscreen kind: borderless (desktop resolution, fast switching) or exclusive (uses 'resolution')\n"
+        "fullscreen_mode = %s\n"
+        "; Output resolution: auto, native (the desktop's), or WxH (e.g. 1920x1080). Sets the window size, and the display mode\n"
+        "; in exclusive fullscreen. This is the output size, not the game's internal rendering resolution.\n"
+        "resolution = %s\n"
+        "; Window size when resolution = auto: 640x480 * window_scale (854x480 in widescreen)\n"
         "window_scale = %d\n"
+        "; Scaling: fit (largest picture with the right aspect), integer (whole multiples of the\n"
+        "; game's 240 lines, no uneven pixels), stretch (fill the window, distorts)\n"
+        "scaling = %s\n"
+        "; Filter: smooth (bilinear), sharp (crisp pixels without shimmer), nearest (raw pixels)\n"
+        "filter = %s\n"
         "; Controls: sideways (Wii Remote held sideways), nunchuk (Wii Remote + Nunchuk) or classic (Classic Controller).\n"
         "; Pick the same grip in the game's menu.\n"
         "controls = %s\n"
@@ -92,7 +109,10 @@ void config_save() {
         "; Game speed: 1 = normal ... 8 = eight times (as far as the PC keeps up).\n"
         "; The game logic is tied to its frame rate, so this is fast-forward. Hold Tab (or click the right stick) for 4x (or double the set speed, up to 8x).\n"
         "speed = %d\n",
-        g_cfg.resolution_scale, g_cfg.widescreen, g_cfg.vsync, g_cfg.fullscreen, g_cfg.window_scale,
+        g_cfg.resolution_scale, g_cfg.widescreen, g_cfg.vsync, g_cfg.fullscreen, g_cfg.fullscreen_mode.c_str(),
+        g_cfg.resolution.c_str(), g_cfg.window_scale, g_cfg.scaling.c_str(), g_cfg.filter.c_str(),
         g_cfg.controls.c_str(), g_cfg.swap_ab_xy, g_cfg.show_perf, g_cfg.anisotropy, g_cfg.smooth_textures, g_cfg.msaa, g_cfg.speed);
+    if (!g_cfg.enh.empty()) fprintf(w, "\n; Enhancements (1 = on, 0 = off)\n");
+    for (auto& [id, on] : g_cfg.enh) fprintf(w, "enh_%s = %d\n", id.c_str(), on ? 1 : 0);
     fclose(w);
 }
