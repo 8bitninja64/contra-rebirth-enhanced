@@ -4,7 +4,7 @@ Inherited from upstream v0.2 unless marked otherwise. Update when an issue is co
 
 | Area | Issue | Status |
 | --- | --- | --- |
-| Video | True widescreen (F1 → "True widescreen", needs Aspect 16:9; off by default): checked through Stage 1, 1B and Stage 2 (A/B) by autoplay. Scrolling sections are correct. Where the camera is locked against a map edge (Stage 1 boss room, parts of 1B and 2) the extra width shows past the end of the level art (empty/black strips), because those rooms are only 320 wide. Fix idea: clamp the widened view to the map bounds, or fall back to 4:3 bars per scene. The Stage 1 alarm tint colours only the old 4:3 area. Stages 3–5 unchecked. | in progress |
+| Video | True widescreen (F1 → "True widescreen", needs Aspect 16:9; off by default): checked on all five stages by autoplay. Scrolling sections are correct and enemies spawn at the 16:9 edge (same spawn counts as 4:3). Where the level art ends inside the 16:9 view (Stage 4 descent shaft: the outdoor sky shows on the left; start of Stage 5: a dark strip on the left; Stage 1 boss room) the extra width shows whatever lies past the map edge. A camera shift toward the content (`WS_SHIFT=1`) is experimental: some layers follow their own camera and split. The player is still clamped to the 4:3 area (fn_8000AA80). The Stage 1 alarm tint colours only the old 4:3 area. | in progress |
 | Video | Glitch strip at the right edge on the first Stage 1 frame (upstream NOTES). | unverified |
 | Video | Only the game's own 4:3 / 16:9 (pillarboxed) picture; 16:10 and 21:9 need true widescreen first (stretching is available but is not widescreen). | open |
 | Input | Keyboard and pad bindings are hard-coded; only the first controller is used. | open |

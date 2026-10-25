@@ -37,15 +37,16 @@ Order (each step verified before the next):
      smooth / sharp / nearest, resolution auto / native / WxH for the window.
    - built, untested: exclusive fullscreen at a chosen resolution (needs a person at the screen).
    - 16:10 / 21:9 only make sense after step 2; the game's picture is 4:3 or pillarboxed 16:9.
-2. True widescreen: done for Stage 1 (enhancement `widescreen`; renderer widens the 320×240
-   playfield pass, copy and composite; hook on fn_800DFC30 widens tile culling). Todo: verify
-   Stages 2–5 and bosses, the alarm tint, then decide whether it becomes the default.
+2. True widescreen: done (enhancement `widescreen`; renderer widens the 320×240 playfield pass,
+   copy and composite; tile culling, spawn region and on-screen test widened; 4:3 background
+   stretch). Checked on Stages 1–5. Todo: map edges where the art ends inside 16:9 (Stage 4
+   shaft, Stage 5 start, boss rooms), the alarm tint, then decide whether it becomes the default.
 3. Frame pacing: done to 59.6 game frames/s (see KNOWN_ISSUES). >60 fps would need
    interpolation of the game's own movement; out of scope.
 
 ## Phase 6b — cheats (done)
 Infinite lives, invincibility (game's no-death flag), always Spread/Laser/Homing; F1 rows.
-Todo: stage select (stage number not located yet; engines Engine1A…5C are created in sequence).
+Level select done (`cheat_stage`); todo: the "AREA n" label still shows the old stage.
 
 ## Phase 6 — enhancement system
 - built: `src/hooks.txt` → the generator keeps the original as `o_X` and routes `f_X` through a hook slot.
@@ -54,8 +55,9 @@ Todo: stage select (stage number not located yet; engines Engine1A…5C are crea
 - todo: settings-menu page for enhancements (Phase 7).
 
 ## Phase 7 — settings menu
-Extend `overlay.cpp` into Graphics / Controls / Audio / Enhancements / System pages, keyboard and
-pad navigable; persisted in `contrarebirth.ini`.
+Done: Dear ImGui menu (Display, Graphics, Audio, Controls, Gameplay, Cheats, About), pauses the
+game, pad and keyboard navigation, key rebinding; persisted in `contrarebirth.ini`. Todo: verify
+pad rebinding and the Linux build of the menu.
 
 ## Phase 8 — quality and releases
 GitHub Actions build check (runtime only — the generated code needs the user's DOL, so CI

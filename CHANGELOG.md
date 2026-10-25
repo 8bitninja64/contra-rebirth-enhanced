@@ -22,6 +22,12 @@
   flag; pits still kill), always Spread / Laser / Homing.
 - RE/test tools: RAM snapshots, POKE, write watchpoint, draw call-stack tracing, NO_HOST_INPUT.
 - True widescreen (enhancement `widescreen`, needs 16:9): widened playfield pass, copy and
-  composite, plus widened view rectangle for culling. In progress.
+  composite, plus widened view rectangle for tile culling. Enemies and item carriers spawn at
+  the 16:9 edge (object-layer spawn region and the engines' on-screen test count the 16:9
+  width); a backmost layer that only covers 4:3 (Stage 2 sky and vortex) is stretched to 16:9.
+- F1 menu rebuilt on Dear ImGui in the style of the TenchuZ / Blitz ports: Display, Graphics,
+  Audio (volume, mute), Controls (key rebinding), Gameplay, Cheats, About; pauses the game.
+- Level select cheat (`cheat_stage` + `start_stage`): a new game starts at the chosen stage.
+- `spawn_log` diagnostic enhancement: logs game objects as they appear and vanish.
 - Docs: `ARCHITECTURE.md`, `BUILDING.md`, `DEVELOPMENT_PLAN.md`, `KNOWN_ISSUES.md`.
 - `.gitignore`: decrypted WAD contents, `dist/`, AppImages.

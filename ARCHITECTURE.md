@@ -147,6 +147,9 @@ On/Off row in the F1 menu automatically.
 | `+0x04` → player object | vtable `80213B88`; `+0x88` current state handler (member-function triple, `8004A030` on foot, `8004B360` dying); `+0xA8 & 1` killed; `+0xB8` respawn invulnerability timer |
 | `fn_80013F00` | boot sequence (strap screen, Konami logo) |
 | `fn_80111A70` | tile layer draw; culls against the view rectangle from `fn_800DFC30` |
+| `fn_8010DF80` / `fn_8010E260` | CTPObjLayer / MObjLayer: region from the view rectangle; placements entering it are created through the stage's popper (vtable slot 0x1C), leaving it slot 0x18 |
+| `[802E0120]` (`r13-0x5240`) | current engine; vtable slot 0x18 camera position, 0x20 `fn_8000A9B0` "is on screen" (pos, margin; 160×120 half size), 0x24 `fn_8000AA80` clamp x to the screen (player) |
+| `[802E0178]` (`r13-0x51E8`) | list of all game objects (CTBehave base, `fn_80047210`), next at `+0x0C` |
 | Engines | `Engine1A … Engine5C` are stages/halves, plus `EngineDemo/Title/Select/Start/Over/Staff/Debug/Test` |
 
 Render pipeline in gameplay: playfield pass (viewport 320×240, ortho 2/320) → EFB copy 320×240
