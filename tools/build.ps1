@@ -43,7 +43,7 @@ $env:PATH = "$mingw\bin;$env:PATH"
 $game = Join-Path $root 'game'
 if ($Wad) {
     Write-Host "== Unpacking $Wad"
-    python -I (Join-Path $root 'tools\prepare_wad.py') $Wad $game
+    python (Join-Path $root 'tools\prepare_wad.py') $Wad $game
     if ($LASTEXITCODE) { throw 'prepare_wad.py failed' }
 }
 if (-not (Test-Path (Join-Path $game 'main.dol'))) { throw "No game\main.dol. Run once with -Wad <your WAD>." }
@@ -51,7 +51,7 @@ if (-not (Test-Path (Join-Path $game 'main.dol'))) { throw "No game\main.dol. Ru
 Write-Host '== Generating C++ from main.dol'
 Push-Location (Join-Path $root 'src')
 try {
-    python -I recomp.py ..\game\main.dol ..\config\symbols.txt gen 300
+    python recomp.py ..\game\main.dol ..\config\symbols.txt gen 300
     if ($LASTEXITCODE) { throw 'recomp.py failed' }
 
     Write-Host '== Configuring'
