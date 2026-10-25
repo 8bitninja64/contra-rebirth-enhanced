@@ -37,6 +37,7 @@ class Gen:
         self.stats = collections.Counter()
         self.hle = {}
         self.stubs = {}
+        self.hooks = {}   # start -> slot index (hooks.txt): runtime-switchable host overrides
         # jump tables: map function start -> set of targets
         self.jt = collections.defaultdict(set)
         import bisect
@@ -461,6 +462,11 @@ class Gen:
             self.ins(pc, self.dol.word(pc), start, end, labels, body)
             out.append('  ' + ' '.join(body) + f' // {pc:08X}')
         out.append('}')
+        if start in self.hooks:
+            # original body becomes o_X; f_X calls the installed hook (if any) with it
+            out[1] = f'void o_{start:08X}(Ctx* __restrict c) {{'
+            out.append(f'void f_{start:08X}(Ctx* __restrict c) {{ HookFn h = g_hook_fn[{self.hooks[start]}]; '
+                       f'if (h) h(c, o_{start:08X}); else o_{start:08X}(c); }}')
         return '\n'.join(out)
 
 
@@ -485,10 +491,24 @@ def main():
                     g.hle[byname[l]] = l
             elif l:
                 print('hle: unknown symbol', l)
+    hookfile = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'hooks.txt')
+    if os.path.exists(hookfile):
+        for l in open(hookfile):
+            l = l.split('#')[0].strip()
+            if not l:
+                continue
+            if l not in byname:
+                sys.exit(f'hooks.txt: unknown symbol {l}')
+            if byname[l] in g.hle or byname[l] in g.stubs:
+                sys.exit(f'hooks.txt: {l} is already replaced in hle.txt')
+            g.hooks[byname[l]] = len(g.hooks)
     os.makedirs(outdir, exist_ok=True)
     h = io.StringIO()
     if True:
         h.write('#pragma once\n#include "ppc.h"\n')
+        h.write('typedef void (*HookFn)(Ctx*, GuestFn orig);\nextern HookFn g_hook_fn[];\n')
+        for a in g.hooks:
+            h.write(f'void o_{a:08X}(Ctx*);\n')
 
         for a, s, n in funcs:
             h.write(f'void f_{a:08X}(Ctx*);\n')
@@ -499,6 +519,19 @@ def main():
             nm = n.replace('\\', '\\\\').replace('"', '\\"')
             t.write(f'  {{0x{a:08X}u, 0x{s:X}u, f_{a:08X}, "{nm}"}},\n')
         t.write(f'}};\nconst unsigned FN_COUNT = {len(funcs)};\n')
+    # hook slots: names/addresses for the runtime enhancement manager (src/runtime/enhancements)
+    hk = io.StringIO()
+    hk.write('#include "funcs.h"\n#include "hooks_table.h"\n')
+    hk.write(f'HookFn g_hook_fn[{max(1, len(g.hooks))}];\nconst HookDef HOOK_DEFS[] = {{\n')
+    for a, i in g.hooks.items():
+        hk.write(f'  {{"{g.names[a]}", 0x{a:08X}u, o_{a:08X}}},\n')
+    if not g.hooks:
+        hk.write('  {nullptr, 0, nullptr},\n')
+    hk.write(f'}};\nconst unsigned HOOK_COUNT = {len(g.hooks)};\n')
+    write_if_changed(f'{outdir}/hooks.cpp', hk.getvalue())
+    write_if_changed(f'{outdir}/hooks_table.h', '#pragma once\n#include "ppc.h"\n'
+                     'struct HookDef { const char* name; uint32_t addr; GuestFn orig; };\n'
+                     'extern const HookDef HOOK_DEFS[]; extern const unsigned HOOK_COUNT;\n')
     with open(f'{outdir}/table.h', 'w') as t:
         t.write('#pragma once\n#include "ppc.h"\nstruct FnEntry { uint32_t addr, size; GuestFn fn; const char* name; };\n'
                 'extern const FnEntry FN_TABLE[]; extern const unsigned FN_COUNT;\n')
@@ -510,7 +543,7 @@ def main():
             o.write(g.function(a, s, nm) + '\n\n')
         write_if_changed(f'{outdir}/code_{n:03d}.cpp', o.getvalue())
         n += 1
-    print('files', n, dict(g.stats))
+    print('files', n, 'hooks', len(g.hooks), dict(g.stats))
 
 
 if __name__ == '__main__':

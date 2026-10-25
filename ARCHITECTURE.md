@@ -114,9 +114,21 @@ hook on a guest function has to be woven in by the generator (see §10).
 | Config + platform layer | `config.*`, `gl_platform_sdl.cpp` | yes | display, scaling, input, vsync |
 | GX state interception | `gx_render.cpp` (projection/viewport/scissor) | yes | widescreen, resolution |
 | Guest memory patches at boot | after `load_dol()` in `main()` | yes, if DOL hash checked | constant tweaks |
-| Generator-woven hooks (planned) | `recomp.py` + hook table | yes | per-function host overrides switchable at runtime |
+| Generator-woven hooks | `src/hooks.txt` + `runtime/enhancements/` | yes | per-function host overrides switchable at runtime |
 
-The planned hook mechanism: a `src/hooks.txt` list (like `hle.txt`) makes the generator add
-`if (g_hook[N]) { g_hook[N](c); return; }` at the top of the named functions; the runtime
-enhancement manager fills the table, so enhancements can be toggled without regenerating and
-the generated code stays untouched by hand.
+### Hooks and the enhancement manager
+
+`src/hooks.txt` lists guest functions (by symbol name). For each one the generator emits the
+original body as `o_XXXXXXXX` and a wrapper `f_XXXXXXXX` that calls `g_hook_fn[slot](c, o_X)` when
+a hook is installed, else `o_X(c)`. It also writes `gen/hooks.cpp` (slot table: name, address,
+original). Functions not listed are generated exactly as before.
+
+`runtime/enhancements/enhancements.{h,cpp}` is the manager. An enhancement is a static
+`Enhancement` record (id, name, description, default, `init()`, `active` flag) registered with
+`REGISTER_ENHANCEMENT`. At startup `enh_init_all()` hashes `game/main.dol`; only if it is the
+supported build (sha1 `825fb4ec…`) are enabled enhancements started. `init()` installs hooks with
+`enh_hook("GuestName", fn)`; hooks check their `active` flag and fall through to the original when
+off, so toggling at run time is safe. State persists in the ini as `enh_<id> = 0/1`.
+
+Adding one: list the guest function in `src/hooks.txt`, regenerate (`tools/build.ps1` does it),
+add `runtime/enhancements/<id>.cpp` modeled on `frame_stats.cpp`.

@@ -835,6 +835,8 @@ static void efb_copy_impl(uint32_t val) {
                   fprintf(g_log, "[audio] underruns %llu, dropped %llu frames, AI periods skipped %llu, buffered %d ms\n",
                           (unsigned long long)(a.underruns - u0), (unsigned long long)(a.dropped_frames - d0), (unsigned long long)(g_ai_skipped - k0), a.buffered_ms);
                   u0 = a.underruns; d0 = a.dropped_frames; k0 = g_ai_skipped; }
+                { extern std::atomic<uint64_t> g_vi_dropped; static uint64_t v0 = 0; uint64_t v = g_vi_dropped.load();
+                  fprintf(g_log, "[vi] retraces dropped %llu\n", (unsigned long long)(v - v0)); v0 = v; }
                 fprintf(g_log, "[perf] %.1f fps | VI %.1f/s (want 59.9) | audio %.0f/s (want 333) | GPU draw %.0f%%, copies %.0f%% of time | %.0f draws -> %.0f GL calls per frame\n",
                         (g_frame - f0) / sec, (g_vi_count - vi0) / sec, (g_ax_frames - ax0) / sec, g_ns_draw / 1e7 / sec, g_ns_copy / 1e7 / sec,
                         (double)g_draw_calls_in / std::max<uint64_t>(1, g_frame - f0), (double)g_batches / std::max<uint64_t>(1, g_frame - f0));

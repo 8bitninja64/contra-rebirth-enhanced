@@ -416,6 +416,7 @@ int main(int argc, char** argv) {
     uint32_t entry = load_dol((std::string(root) + "/main.dol").c_str());
     low_mem();
     extern void nand_init(const char*); nand_init(root);
+    extern void enh_init_all(const char*); enh_init_all((std::string(root) + "/main.dol").c_str());
     signal(SIGABRT, on_signal);
 #ifndef _WIN32
     signal(SIGALRM, on_signal);

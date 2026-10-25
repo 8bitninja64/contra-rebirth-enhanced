@@ -9,6 +9,7 @@
 
 void mmio_poke(uint32_t a, uint32_t v);
 uint64_t g_vi_count = 0;
+std::atomic<uint64_t> g_vi_dropped{0};   // retraces skipped because the previous one was not yet delivered
 static std::atomic<int> vi_inflight{0};
 
 // Raise SDK interrupt `n` (__OSInterrupt numbering) by calling the registered handler.
@@ -37,7 +38,7 @@ static void vi_thread() {
         next += std::chrono::nanoseconds((long long)(1e9 / hz));
         precise_sleep_until(next);
         if (clk::now() - next > std::chrono::milliseconds(100)) next = clk::now();   // after a stall
-        if (vi_inflight.load()) continue;
+        if (vi_inflight.load()) { g_vi_dropped++; continue; }
         vi_inflight.store(1);
         post_irq([](Ctx* c) {
             g_vi_count++;

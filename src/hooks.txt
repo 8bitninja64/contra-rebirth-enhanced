@@ -1,0 +1,5 @@
+# Guest functions that get a hook slot (see src/runtime/enhancements/enhancements.h).
+# The generator keeps the original body as o_<addr> and makes f_<addr> call the hook installed
+# at run time, or the original when none is. Names must be in config/symbols.txt and must not
+# also be in hle.txt. Regenerate src/gen after editing this file.
+VIWaitForRetrace        # frame_stats
