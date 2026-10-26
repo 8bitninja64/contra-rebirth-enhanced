@@ -173,10 +173,12 @@ bool draw_display() {
         help("Window size, and the display mode in exclusive fullscreen. Custom sizes: resolution = WxH in the .ini.");
     }
     {
-        static const char* names[] = {"Fit (keep aspect)", "Integer (whole multiples of 240 lines)", "Stretch"};
-        static const char* values[] = {"fit", "integer", "stretch"};
-        int v = g_cfg.scaling == "integer" ? 1 : g_cfg.scaling == "stretch" ? 2 : 0;
-        if (combo("Scaling", &v, names, 3)) { g_cfg.scaling = values[v]; g_actions |= OV_ACT_DISPLAY; changed = true; }
+        static const char* names[] = {"Fit (keep aspect)", "Integer (whole multiples of 240 lines)", "Stretch to window",
+                                      "Stretch to 16:9"};
+        static const char* values[] = {"fit", "integer", "stretch", "stretch169"};
+        int v = g_cfg.scaling == "integer" ? 1 : g_cfg.scaling == "stretch" ? 2 : g_cfg.scaling == "stretch169" ? 3 : 0;
+        if (combo("Scaling", &v, names, 4)) { g_cfg.scaling = values[v]; g_actions |= OV_ACT_DISPLAY; changed = true; }
+        if (v == 3) help("The 4:3 picture stretched wide to fill a 16:9 area (bars only if the screen is not 16:9).");
     }
     {
         static const char* names[] = {"Smooth", "Sharp (crisp pixels, no shimmer)", "Nearest (raw pixels)"};
@@ -186,8 +188,8 @@ bool draw_display() {
     }
     if (ImGui::Checkbox("VSync", &g_cfg.vsync)) { g_vsync_dirty_from_menu = true; changed = true; }
     changed |= ImGui::Checkbox("Show FPS counter", &g_cfg.show_perf);
-    next_start_group();
-    {
+    if (kOfferWidescreen) {   // shelved for now (config.h)
+        next_start_group();
         static const char* names[] = {"4:3 (original)", "16:9 widescreen"};
         int v = g_cfg.widescreen ? 1 : 0;
         if (combo("Aspect ratio", &v, names, 2)) { g_cfg.widescreen = v; changed = true; }
@@ -205,9 +207,11 @@ bool enh_checkbox(const char* id, const char* label) {
 bool draw_graphics() {
     bool changed = false;
     focus_first_option();
-    enh_checkbox("widescreen", "True widescreen");
-    help(g_cfg.widescreen ? "Shows more of the level at the sides instead of black bars."
-                          : "Needs Aspect ratio 16:9 (Display), applied on the next start.");
+    if (kOfferWidescreen) {   // shelved for now (config.h)
+        enh_checkbox("widescreen", "True widescreen");
+        help(g_cfg.widescreen ? "Shows more of the level at the sides instead of black bars."
+                              : "Needs Aspect ratio 16:9 (Display), applied on the next start.");
+    }
     {
         static const char* names[] = {"1x  640x528 (original)", "2x  1280x1056", "3x  1920x1584", "4x  2560x2112"};
         int v = std::max(0, std::min(3, g_cfg.resolution_scale - 1));

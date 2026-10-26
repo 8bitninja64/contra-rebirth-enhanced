@@ -68,11 +68,12 @@ static thread_local bool t_current = false;
 
 // Presentation settings as plain ints for the present thread (the config strings are written
 // on the emulation thread).
-enum { SCALE_FIT, SCALE_INTEGER, SCALE_STRETCH };
+enum { SCALE_FIT, SCALE_INTEGER, SCALE_STRETCH, SCALE_STRETCH169 };
 enum { FILTER_SMOOTH, FILTER_SHARP, FILTER_NEAREST };
 static std::atomic<int> g_scale_mode{SCALE_FIT}, g_filter_mode{FILTER_SMOOTH};
 static void update_present_modes() {
-    g_scale_mode = g_cfg.scaling == "integer" ? SCALE_INTEGER : g_cfg.scaling == "stretch" ? SCALE_STRETCH : SCALE_FIT;
+    g_scale_mode = g_cfg.scaling == "integer" ? SCALE_INTEGER : g_cfg.scaling == "stretch" ? SCALE_STRETCH
+                 : g_cfg.scaling == "stretch169" ? SCALE_STRETCH169 : SCALE_FIT;
     g_filter_mode = g_cfg.filter == "sharp" ? FILTER_SHARP : g_cfg.filter == "nearest" ? FILTER_NEAREST : FILTER_SMOOTH;
 }
 
@@ -155,7 +156,7 @@ static bool ui_setup() {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     int scale = g_cfg.window_scale;
-    int ww = (g_cfg.widescreen ? 854 : 640) * scale, wh = 480 * scale;
+    int ww = (g_cfg.widescreen || g_cfg.scaling == "stretch169" ? 854 : 640) * scale, wh = 480 * scale;
     if (!parse_resolution(&ww, &wh)) {
         // automatic size: keep the window inside the desktop's usable area (scaled laptop
         // screens are often smaller than 1708x960), so it never looks like fullscreen
@@ -498,6 +499,10 @@ static void present_thread() {
             dw = dh * an / ad;
             while (dw > ww && dh > 240) { dh -= 240; dw = dh * an / ad; }
         } else if (smode == SCALE_STRETCH) { dw = ww; dh = wh; }
+        else if (smode == SCALE_STRETCH169) {   // the picture stretched to a 16:9 area, centred
+            dw = ww; dh = ww * 9 / 16;
+            if (dh > wh) { dh = wh; dw = wh * 16 / 9; }
+        }
         int dx = (ww - dw) / 2, dy = (wh - dh) / 2;
         glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
         glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sl.tex, 0);

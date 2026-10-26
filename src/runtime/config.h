@@ -5,15 +5,20 @@
 // Settings from the .ini file (next to the executable or in the working folder).
 // Every key can also be overridden with an environment variable of the same name in
 // upper case (e.g. RESOLUTION_SCALE=3).
+// 16:9 (the game's own pillarboxed mode and the True widescreen enhancement) is shelved for
+// now: false hides both from the F1 menu and keeps the game at 4:3 whatever the ini says.
+// All of it still builds; set true to bring it back.
+constexpr bool kOfferWidescreen = false;
+
 struct Config {
     int resolution_scale = 2;          // internal render resolution = 640x528 * scale
     bool vsync = true;
-    bool widescreen = true;            // tell the game the TV is 16:9 and present at 16:9
+    bool widescreen = kOfferWidescreen;   // tell the game the TV is 16:9 and present at 16:9
     bool fullscreen = false;
     int window_scale = 2;              // initial window size = 640x480 * window_scale (or 854x480 widescreen)
     std::string fullscreen_mode = "borderless";  // "borderless" (desktop resolution) or "exclusive"
     std::string resolution = "auto";   // "auto", "native" or WxH: window size, and the display mode in exclusive fullscreen
-    std::string scaling = "fit";       // "fit" (keep aspect), "integer" (whole multiples of 240 lines), "stretch"
+    std::string scaling = "fit";       // "fit" (keep aspect), "integer" (whole multiples of 240 lines), "stretch", "stretch169"
     std::string filter = "smooth";     // "smooth" (bilinear / box), "sharp" (sharp bilinear), "nearest"
     std::string controls = "sideways"; // "sideways", "nunchuk" or "classic" (Classic Controller)
     bool show_perf = true;

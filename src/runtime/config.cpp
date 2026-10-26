@@ -14,12 +14,12 @@ static void set(const std::string& k, const std::string& v) {
     auto b = [&] { return v == "1" || v == "true" || v == "yes" || v == "on"; };
     if (k == "resolution_scale") g_cfg.resolution_scale = std::max(1, std::min(8, atoi(v.c_str())));
     else if (k == "vsync") g_cfg.vsync = b();
-    else if (k == "widescreen") g_cfg.widescreen = b();
+    else if (k == "widescreen") g_cfg.widescreen = b() && kOfferWidescreen;
     else if (k == "fullscreen") g_cfg.fullscreen = b();
     else if (k == "window_scale") g_cfg.window_scale = std::max(1, atoi(v.c_str()));
     else if (k == "fullscreen_mode") g_cfg.fullscreen_mode = v == "exclusive" ? "exclusive" : "borderless";
     else if (k == "resolution") { int w = 0, h = 0; g_cfg.resolution = v == "native" || (sscanf(v.c_str(), "%dx%d", &w, &h) == 2 && w >= 320 && h >= 240) ? v : "auto"; }
-    else if (k == "scaling") g_cfg.scaling = v == "integer" || v == "stretch" ? v : "fit";
+    else if (k == "scaling") g_cfg.scaling = v == "integer" || v == "stretch" || v == "stretch169" ? v : "fit";
     else if (k == "volume") g_cfg.volume = std::max(0, std::min(100, atoi(v.c_str())));
     else if (k == "mute") g_cfg.mute = b();
     else if (k.compare(0, 4, "key_") == 0 && k.size() > 4) g_cfg.keys[k.substr(4)] = v;
@@ -95,7 +95,8 @@ void config_save() {
         "; Window size when resolution = auto: 640x480 * window_scale (854x480 in widescreen)\n"
         "window_scale = %d\n"
         "; Scaling: fit (largest picture with the right aspect), integer (whole multiples of the\n"
-        "; game's 240 lines, no uneven pixels), stretch (fill the window, distorts)\n"
+        "; game's 240 lines, no uneven pixels), stretch (fill the window, distorts),\n"
+        "; stretch169 (stretch to a 16:9 area, bars only if the window is not 16:9)\n"
         "scaling = %s\n"
         "; Filter: smooth (bilinear), sharp (crisp pixels without shimmer), nearest (raw pixels)\n"
         "filter = %s\n"
