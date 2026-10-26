@@ -3,8 +3,9 @@
 // frame on an 854-wide canvas.
 //
 // Render side (gx_render.cpp, g_ws_on): the 320x240 playfield pass is widened to 426.67
-// units around the same camera centre, the EFB copy takes the wider region and the
-// composite quad fills the 16:9 canvas.
+// units plus a 53.33 pad on each side around the same camera centre, the EFB copy takes the
+// wider region and the composite quad fills the 16:9 canvas with a window of it. The window
+// is centred unless g_ws_view (decided here) slides it toward the level art at a map edge.
 //
 // Game side (here), all of it display-only (game logic never sees a changed value):
 // - fn_800DFC30 copies a view's rectangle (left, top, right, bottom at view+0x80, centred
@@ -12,17 +13,25 @@
 //   . the tile layer (fn_80111A70, return address 80111C94), a little past the 16:9 edge so
 //     the layer's real extent can be measured;
 //   . the object layers (CTPObjLayer/MObjLayer fn_8010DF80, return address 8010DFE0), to
-//     exactly 16:9. Placements (enemy generators, item carriers) are created when they enter
-//     this region, so they now appear at the 16:9 edge instead of the old 4:3 edge.
+//     exactly the presented 16:9 window. Placements (enemy generators, item carriers) are
+//     created when they enter this region, so they appear at the 16:9 edge instead of the old
+//     4:3 edge, and sprites are drawn across it.
 // - fn_8000A9B0, every stage engine's "is on screen" test (|pos - camera| <= 160x120 + margin),
-//   counts the 16:9 width. Enemies and generators wait for it before acting; without it a
-//   generator created at the 16:9 edge waited forever and no walkers came.
+//   counts the presented 16:9 window. Enemies and generators wait for it before acting;
+//   without it a generator created at the 16:9 edge waited forever and no walkers came.
 // - Tile layers are timed through fn_80111A70: each layer's drawn extent is recorded. A
 //   layer that only covers the old 4:3 width (a background picture: Stage 2 sky, Stage 3
 //   vortex) is stretched to the 16:9 width.
-// - The 2DCameraLocator (fn_800FA260, position at +0x30) is moved sideways while it draws
-//   when the level's tiles end inside the 16:9 view, so the camera stops at the map edge
-//   instead of showing empty space. Rooms narrower than 16:9 stay centred.
+// - Map edges (the view clamp of the Hangtime port): the game stops its camera where the 4:3
+//   view meets the end of the map, so the level's layers then end exactly on the old 4:3 edge
+//   and the 16:9 view would show what lies past it. When a layer has ended there for a few
+//   frames while reaching past the other side, the presented window slides toward the art by
+//   up to 53.33 units (g_ws_view). The game's camera, positions and scrolling are untouched;
+//   only the picture, the spawn region and the on-screen test follow the window.
+// - Rooms that are only 4:3 wide (every layer ends on the old 4:3 edges, e.g. the Stage 4
+//   skull room and descent shaft) have no art to show at the sides. There the playfield copy
+//   fills them from the nearest 4:3 edge column, softened and darkened outward
+//   (g_ws_fill43, gx_render.cpp).
 #include "enhancements.h"
 #include "config.h"
 #include "hle.h"
@@ -31,8 +40,8 @@
 #include <algorithm>
 #include <cmath>
 
-extern bool g_ws_on, g_ws_in_layer, g_ws_lany;
-extern float g_ws_layer_stretch, g_ws_shift, g_ws_lmin, g_ws_lmax;
+extern bool g_ws_on, g_ws_in_layer, g_ws_lany, g_ws_fill43;
+extern float g_ws_layer_stretch, g_ws_view, g_ws_lmin, g_ws_lmax;
 static bool g_active = false;
 static const float kHalf = 320.f * (16.f / 9.f) / (4.f / 3.f) / 2;   // 213.33: half the 16:9 width
 static const float kOld = 160.f / kHalf;                           // 0.75: the old 4:3 edge in clip units
@@ -52,14 +61,14 @@ static void hook_view_rect(Ctx* c, GuestFn orig) {
     if (!g_ws_on) return;
     static const char* sp = getenv("WS_SPAWN");
     static const float spawn_margin = sp ? (float)atof(sp) : 0;   // WS_SPAWN=<px> tests other spawn distances
-    float half;
+    float half, shift = 0;
     if (caller == 0x80111C94u) half = kHalf + kMargin;                       // the tile layer
-    else if (caller == 0x8010DFE0u && spawn_margin >= 0) half = kHalf + spawn_margin;
+    else if (caller == 0x8010DFE0u && spawn_margin >= 0) half = kHalf + spawn_margin, shift = g_ws_view * kHalf;
     else return;
-    // the 320x240 playfield, wherever the camera (and our shift) put its centre
+    // the 320x240 playfield around the camera
     const float l = RF32(out), t = RF32(out + 4), r = RF32(out + 8), b = RF32(out + 12);
     if (std::fabs(r - l - 320) < 0.01f && std::fabs(b - t - 240) < 0.01f) {
-        const float cx = (l + r) / 2;
+        const float cx = (l + r) / 2 + shift;
         WF32(out, cx - half);
         WF32(out + 8, cx + half);
     }
@@ -78,7 +87,7 @@ static void hook_on_screen(Ctx* c, GuestFn orig) {
     c->r[3] = engine; c->r[4] = 0;
     dispatch(c, R32(R32(engine) + 0x18));            // camera position (x, y)
     const uint32_t cam = c->r[3];
-    const float dx = RF32(pos) - RF32(cam), dy = RF32(pos + 4) - RF32(cam + 4);
+    const float dx = RF32(pos) - RF32(cam) - g_ws_view * kHalf, dy = RF32(pos + 4) - RF32(cam + 4);
     c->r[3] = std::fabs(dx) <= kHalf + margin && std::fabs(dy) <= 120 + margin;
 }
 
@@ -102,45 +111,45 @@ static void hook_tile_layer(Ctx* c, GuestFn orig) {
     }
 }
 
-static void hook_camera(Ctx* c, GuestFn orig) {
-    const uint32_t loc = c->r[3];
-    if (!g_ws_on || g_ws_shift == 0) { orig(c); return; }
-    const float x = RF32(loc + 0x30), scale = RF32(loc + 0x40);
-    WF32(loc + 0x30, x + g_ws_shift * kHalf / (scale > 0.01f ? scale : 1.f));
-    orig(c);
-    WF32(loc + 0x30, x);
-}
-
-// once per game frame: decide next frame's camera shift from this frame's layer extents
+// once per game frame: decide the presented window offset from this frame's layer extents
 static void frame() {
     g_ws_on = g_active && g_cfg.widescreen;
-    if (!g_ws_on) { g_ws_shift = 0; g_layers.clear(); g_layer_order = 0; return; }
-    float lo = 1e9f, hi = -1e9f;
-    for (auto& [id, li] : g_layers)
-        if (li.seen && !li.narrow) { lo = std::min(lo, li.lo); hi = std::max(hi, li.hi); }
-    // Keep the view [-1+s, 1+s] inside the content [lo, hi]: s in [lo+1, hi-1], closest to 0.
-    // Content reaching the culling limit goes on past it. Content narrower than the view
-    // (a 4:3 room) stays centred.
-    float target = 0;
-    if (hi > lo) {
-        const float lim = 1.f + kMargin / kHalf - 0.03f;
-        const bool lo_open = lo <= -lim, hi_open = hi >= lim;
-        if (lo_open && !hi_open) target = std::min(0.f, hi - 1.f);
-        else if (hi_open && !lo_open) target = std::max(0.f, lo + 1.f);
-        else if (!lo_open && !hi_open) target = hi - lo >= 2.f ? std::max(lo + 1.f, std::min(hi - 1.f, 0.f)) : (lo + hi) / 2;
+    if (!g_ws_on) { g_ws_view = 0; g_ws_fill43 = false; g_layers.clear(); g_layer_order = 0; return; }
+    // A layer at least as wide as the old 4:3 view that ends inside the 16:9 view on one side
+    // and reaches past it on the other is the end of the map (the game's camera stops once the
+    // 4:3 view meets it). The window slides toward the art: by the pad at most, and only as far
+    // as that layer has art on the other side. Small pieces (props, single objects) don't count.
+    const float kPad = 1.f - kOld;                                  // 0.25: the render pad
+    float want_lo = 0, want_hi = 0;                                 // slide right / left
+    for (auto& [id, li] : g_layers) {
+        if (!li.seen || li.narrow || li.hi - li.lo < 2 * kOld - 0.05f) continue;
+        if (li.lo > -1.f && li.hi > 1.01f) want_lo = std::max(want_lo, std::min({kPad, li.lo + 1.f, li.hi - 1.f}));
+        if (li.hi < 1.f && li.lo < -1.01f) want_hi = std::max(want_hi, std::min({kPad, 1.f - li.hi, -1.f - li.lo}));
     }
-    target = std::max(-1.f + kOld, std::min(1.f - kOld, target));   // never more than the extra width
-    // The camera shift is experimental (WS_SHIFT=1): some layers follow their own camera, so
-    // moving the locator split the scene, and a shifted 4:3 background no longer measured as
-    // narrow (lost its stretch). The background stretch already fills the 4:3 arenas.
-    static const bool use_shift = getenv("WS_SHIFT") != nullptr;
-    if (!use_shift) target = 0;
-    const float step = 0.04f;                                       // ~8 px per frame
-    g_ws_shift += std::max(-step, std::min(step, target - g_ws_shift));
-    if (std::fabs(g_ws_shift) < 1e-4f) g_ws_shift = 0;
+    float target = want_lo > 0 && want_hi > 0 ? 0 : want_lo - want_hi;
+    // a 4:3 room: something as wide as the 4:3 view is drawn, and nothing reaches past it
+    bool room43 = false, inside = true;
+    for (auto& [id, li] : g_layers) {
+        if (!li.seen) continue;
+        if (li.lo < -kOld - 0.03f || li.hi > kOld + 0.03f) inside = false;
+        if (li.hi - li.lo >= 2 * kOld - 0.1f) room43 = true;
+    }
+    room43 = room43 && inside;
+    static int room_held = 0;
+    room_held = room43 == g_ws_fill43 ? 0 : room_held + 1;
+    if (room_held >= 4) { g_ws_fill43 = room43; room_held = 0; }
+    if (g_ws_fill43) target = 0;
+    // the camera passes the 4:3 edge for single frames while scrolling: act on it only once it holds
+    static float pending = 0; static int held = 0;
+    if (target != 0 && std::fabs(target - pending) < 0.02f) held++; else held = 0;
+    pending = target;
+    if (target != 0 && held < 4) target = g_ws_view;
+    const float step = 0.02f;                                       // ~4 px per frame
+    g_ws_view += std::max(-step, std::min(step, target - g_ws_view));
+    if (std::fabs(g_ws_view) < 1e-4f) g_ws_view = 0;
     static int n = 0;
     if (g_log_ws && ++n % 120 == 0) {
-        fprintf(g_log, "[ws] shift %.3f target %.3f content %.2f..%.2f layers:", g_ws_shift, target, lo, hi);
+        fprintf(g_log, "[ws] view %.3f target %.3f%s layers:", g_ws_view, target, g_ws_fill43 ? " fill43" : "");
         for (auto& [id, li] : g_layers)
             if (li.seen) fprintf(g_log, " #%d %08X %.2f..%.2f%s", li.order, id, li.lo, li.hi, li.narrow ? " narrow" : "");
         fputc('\n', g_log);
@@ -153,7 +162,6 @@ static void frame() {
 static bool init() {
     enh_on_frame(frame);
     return enh_hook("fn_800DFC30", hook_view_rect) && enh_hook("fn_80111A70", hook_tile_layer) &&
-           enh_hook("fn_800FA260", hook_camera) &&
            enh_hook("fn_8000A9B0", hook_on_screen);
 }
 

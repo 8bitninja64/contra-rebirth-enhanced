@@ -33,19 +33,25 @@ static const int EFB_W = 640, EFB_H = 528;   // logical EFB size
 // Contra draws its playfield with a 320x240 ortho/viewport, copies that EFB region to a
 // texture and, in 16:9 mode, draws the texture pillarboxed on an 854-wide canvas. With
 // g_ws_on (enhancements/widescreen.cpp) the playfield pass is widened around the same
-// camera centre to 426.67 units, the copy takes the wider region and the composite quad
-// fills the whole 16:9 canvas. What the game draws in the extra area is up to its culling.
+// camera centre to 426.67 units plus a pad of 53.33 on each side, the copy takes that wider
+// region and the composite quad fills the whole 16:9 canvas with a 426.67-wide window of it.
+// The window is normally centred; at a map edge it slides toward the level art by up to the
+// pad (g_ws_view), like the view clamp of the Hangtime port: only the picture moves, the
+// game's camera does not. What the game draws in the extra area is up to its culling.
 bool g_ws_on = false;
 static const float kWsW = 320.f * (16.f / 9.f) / (4.f / 3.f);   // 426.67: playfield width at 16:9
+static const float kWsPad = (kWsW - 320.f) / 2;                  // 53.33: room for the view shift
+static const float kWsR = kWsW + 2 * kWsPad;                     // 533.33: rendered playfield width
 static bool g_ws_pass = false;      // the current draw setup is the (widened) playfield pass
 static uint32_t g_ws_copy = 0;      // texture address the playfield was copied to this frame
 static uint32_t texmap_addr(int m);
 // Per tile layer (set by enhancements/widescreen.cpp around fn_80111A70): its horizontal
-// extent in camera-relative clip units (+-1 = the 16:9 view edge, before g_ws_shift was
-// applied), and an optional horizontal stretch (backgrounds that are only 4:3 wide).
+// extent in camera-relative view units (+-1 = the centred 16:9 view edge), and an optional
+// horizontal stretch (backgrounds that are only 4:3 wide).
 bool g_ws_in_layer = false;
 float g_ws_layer_stretch = 1.f;
-float g_ws_shift = 0.f;            // camera shift (clip units) the camera locator hook applied
+float g_ws_view = 0.f;             // presented window offset in view units (+ = shows more right)
+bool g_ws_fill43 = false;          // the scene has no art outside 4:3: fill the sides from its edges
 float g_ws_lmin = 0.f, g_ws_lmax = 0.f;
 bool g_ws_lany = false;
 static int RS = 1, PW = 640, PH = 528;           // render scale and physical EFB size
@@ -311,9 +317,9 @@ static void setup_vertex_pipeline(int vat) {
     if (g_ws_on && d.ortho && std::fabs(2 * wd - 320) < 0.5f && std::fabs(2 * ht + 240) < 0.5f &&
         std::fabs(xo - 342 - 160) < 0.5f && std::fabs(d.P[0] - 2.f / 320) < 1e-5f) {
         const float c = -d.P[1] / d.P[0];   // playfield x at the screen centre (camera)
-        d.P[0] = 2.f / kWsW;
+        d.P[0] = 2.f / kWsR;
         d.P[1] = -c * d.P[0];
-        wd = kWsW / 2; xo = 342 + kWsW / 2;
+        wd = kWsR / 2; xo = 342 + kWsR / 2;
         g_ws_pass = true;
     }
     const float S = 16777216.f;
@@ -604,6 +610,8 @@ static void bind_texmap(int m) {
     }
     if (cp != g_copies.end() && cp->second.w == w && cp->second.h == h) {
         tex = cp->second.tex;
+    } else if (cp != g_copies.end() && addr == g_ws_copy && cp->second.w > w && cp->second.tex) {
+        tex = cp->second.tex;   // widened playfield copy, larger than the game's texture: the composite maps its UVs
     } else if (cp != g_copies.end() && cp->second.w <= w && cp->second.h <= h && cp->second.tex) {
         CopyEntry& e = cp->second;
         if (!e.pad) glGenTextures(1, &e.pad);
@@ -730,7 +738,7 @@ static void apply_state() {
     int xoff = (bp[0x59] & 1023) * 2, yoff = ((bp[0x59] >> 10) & 1023) * 2;
     int x0 = ((bp[0x20] >> 12) & 2047) - xoff, y0 = (bp[0x20] & 2047) - yoff;
     int x1 = ((bp[0x21] >> 12) & 2047) - xoff + 1, y1 = (bp[0x21] & 2047) - yoff + 1;
-    if (g_ws_pass && x0 == 0 && x1 == 320) x1 = (int)std::ceil(kWsW);   // widened playfield
+    if (g_ws_pass && x0 == 0 && x1 == 320) x1 = (int)std::ceil(kWsR);   // widened playfield
     x0 = std::max(0, x0); y0 = std::max(0, y0); x1 = std::min(EFB_W, x1); y1 = std::min(EFB_H, y1);
     glEnable(GL_SCISSOR_TEST);
     glScissor(x0 * RS, (EFB_H - y1) * RS, std::max(0, x1 - x0) * RS, std::max(0, y1 - y0) * RS);
@@ -779,14 +787,26 @@ static void resize_efb(int scale) {
 // (no decode), so it holds what the TEV would read from that format: single-channel
 // formats in all four channels, IA/RA formats as (I,I,I,A), depth formats from the Z buffer.
 static GLuint g_copy_prog = 0, g_copy_vao = 0;
-static GLint g_cu_mode = -1, g_cu_rect = -1, g_cu_col = -1, g_cu_dep = -1, g_cu_half = -1;
+static GLint g_cu_mode = -1, g_cu_rect = -1, g_cu_col = -1, g_cu_dep = -1, g_cu_half = -1, g_cu_fill = -1;
+static float g_copy_fill[4] = {0, 0, 0, 0};   // widescreen 4:3 room: left, right edge (EFB px), far dim, scale (0 = off)
 static void copy_convert(GLuint dst_tex, int sx, int sy, int w, int h, int tw, int th, int fmt, bool intensity, bool depth) {
     if (!g_copy_prog) {
         const char* vs = "#version 330 core\nvoid main(){ vec2 p = vec2(gl_VertexID & 1, gl_VertexID >> 1) * 2.0 - 1.0; gl_Position = vec4(p, 0.0, 1.0); }\n";
         const char* fs =
             "#version 330 core\n"
-            "uniform sampler2D u_col; uniform sampler2D u_dep; uniform int u_mode; uniform vec4 u_rect; uniform int u_half; out vec4 o;\n"
-            "vec4 fetch(vec2 px) { return texture(u_col, px / vec2(textureSize(u_col, 0))); }\n"
+            "uniform sampler2D u_col; uniform sampler2D u_dep; uniform int u_mode; uniform vec4 u_rect; uniform int u_half; uniform vec4 u_fill; out vec4 o;\n"
+            "vec4 fetch0(vec2 px) { return texture(u_col, px / vec2(textureSize(u_col, 0))); }\n"
+            // widescreen 4:3 room (no art outside 4:3): the nearest edge column, softened
+            // vertically and darkened with distance
+            "vec4 fetch(vec2 px) {\n"
+            " if (u_fill.w == 0.0 || (px.x >= u_fill.x && px.x <= u_fill.y)) return fetch0(px);\n"
+            " float e = px.x < u_fill.x ? u_fill.x + 0.5 : u_fill.y - 0.5;\n"
+            " float t = clamp(abs(px.x - e) / u_fill.x, 0.0, 1.0);\n"
+            " float r = (1.0 + t * 6.0) * u_fill.w;\n"
+            " vec4 c = (fetch0(vec2(e, px.y)) * 2.0 + fetch0(vec2(e, px.y - r)) + fetch0(vec2(e, px.y + r))\n"
+            "         + fetch0(vec2(e, px.y - 2.0 * r)) + fetch0(vec2(e, px.y + 2.0 * r))) / 6.0;\n"
+            " return vec4(c.rgb * mix(1.0, u_fill.z, t), c.a);\n"
+            "}\n"
             "void main(){\n"
             " vec2 px = vec2(u_rect.x + gl_FragCoord.x * u_rect.z, u_rect.y - gl_FragCoord.y * u_rect.w);\n"
             " int m = u_mode & 15; bool inten = (u_mode & 16) != 0; bool dep = (u_mode & 32) != 0;\n"
@@ -824,6 +844,7 @@ static void copy_convert(GLuint dst_tex, int sx, int sy, int w, int h, int tw, i
         g_cu_col = glGetUniformLocation(g_copy_prog, "u_col");
         g_cu_dep = glGetUniformLocation(g_copy_prog, "u_dep");
         g_cu_half = glGetUniformLocation(g_copy_prog, "u_half");
+        g_cu_fill = glGetUniformLocation(g_copy_prog, "u_fill");
         glGenVertexArrays(1, &g_copy_vao);
     }
     static GLuint fbo = 0;
@@ -841,6 +862,7 @@ static void copy_convert(GLuint dst_tex, int sx, int sy, int w, int h, int tw, i
     glUniform1i(g_cu_col, 0); glUniform1i(g_cu_dep, 1);
     glUniform1i(g_cu_mode, fmt | (intensity ? 16 : 0) | (depth ? 32 : 0));
     glUniform1i(g_cu_half, 0);
+    glUniform4fv(g_cu_fill, 1, g_copy_fill);
     glUniform4f(g_cu_rect, (float)(sx * RS), (float)((EFB_H - sy) * RS), (float)w / tw, (float)h / th);
     glBindVertexArray(g_copy_vao);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -859,7 +881,7 @@ static void efb_copy_impl(uint32_t val) {
     uint32_t dst = ((bp[0x4B] & 0xFFFFFF) << 5) | 0x80000000u;
     bool to_xfb = (val >> 14) & 1, clear = (val >> 11) & 1, half = (val >> 9) & 1;
     if (g_ws_on && !to_xfb && sx == 0 && sy == 0 && w == 320 && h == 240) {   // the playfield: take the wide region
-        w = (int)std::ceil(kWsW);
+        w = (int)std::ceil(kWsR);
         g_ws_copy = dst;
     }
     g_gx.stats.copies++;
@@ -962,7 +984,12 @@ static void efb_copy_impl(uint32_t val) {
         bool zcopy = (bp[0x43] & 7) == 3;     // pixel format Z24: the copy reads the depth buffer
         if (g_gxdbg || (long)g_frame == g_fdump) fprintf(g_log, "[copy] frame %llu dst %08X src %d,%d %dx%d -> %dx%d fmt %d%s%s\n", (unsigned long long)g_frame,
                                                          dst, sx, sy, w, h, tw, th, cfmt, inten ? " intensity" : "", zcopy ? " DEPTH" : "");
-        if (!zcopy && (cfmt == 6 || cfmt == 5)) {
+        const bool fill = g_ws_fill43 && dst == g_ws_copy && !zcopy;
+        if (fill) {   // the 4:3 area of the widened playfield, in EFB pixels
+            g_copy_fill[0] = (kWsR / 2 - 160.f) * RS; g_copy_fill[1] = (kWsR / 2 + 160.f) * RS;
+            g_copy_fill[2] = 0.45f; g_copy_fill[3] = (float)RS;
+        }
+        if (!fill && !zcopy && (cfmt == 6 || cfmt == 5)) {
             // plain color: blit EFB region (flipping to top-down texture orientation)
             static GLuint tmpfbo = 0;
             if (!tmpfbo) glGenFramebuffers(1, &tmpfbo);
@@ -974,6 +1001,7 @@ static void efb_copy_impl(uint32_t val) {
             glBindFramebuffer(GL_FRAMEBUFFER, g_fbo);
         } else {
             copy_convert(e.tex, sx, sy, w, h, tw, th, cfmt, inten, zcopy);
+            g_copy_fill[3] = 0;
         }
         // keep the RAM copy's texture cache entry from shadowing this copy
     }
@@ -1102,25 +1130,25 @@ void gx_draw(uint8_t prim, int vat, uint32_t count, const uint8_t* data, int vsi
         p = start + vsize;
         transform(r, verts[i]);
     }
-    // In the widened playfield pass, clip x spans the whole 640-wide EFB while the view is
-    // its first 426.67 pixels: view units v (-1..1 across the view) from clip units c.
-    const float vk = (EFB_W / 2.f) / (kWsW / 2.f), vc = -1.f + kWsW / EFB_W;   // scale, view centre in clip
+    // In the widened playfield pass, clip x spans the whole 640-wide EFB while the playfield
+    // is its first 533.33 pixels: view units v (-1..1 across the centred 16:9 view) from clip c.
+    const float vk = (EFB_W / 2.f) / (kWsW / 2.f), vc = -1.f + kWsR / EFB_W;   // scale, view centre in clip
     auto to_view = [&](float c) { return (c - vc) * vk; };
     if (g_ws_pass && g_ws_in_layer) {
         for (uint32_t i = 0; i < count; i++) {
             const float w = verts[i].pos[3];
-            const float v = to_view(verts[i].pos[0] / w) + g_ws_shift;
+            const float v = to_view(verts[i].pos[0] / w);
             if (!g_ws_lany) { g_ws_lmin = g_ws_lmax = v; g_ws_lany = true; }
             g_ws_lmin = std::min(g_ws_lmin, v); g_ws_lmax = std::max(g_ws_lmax, v);
-            if (g_ws_layer_stretch != 1.f)   // stretch about the view centre
-                verts[i].pos[0] = (vc + (verts[i].pos[0] / w - vc) * g_ws_layer_stretch) * w;
+            if (g_ws_layer_stretch != 1.f)   // stretch over the presented window
+                verts[i].pos[0] = (vc + (g_ws_view + v * g_ws_layer_stretch) / vk) * w;
         }
     }
     const bool ws_composite = g_ws_on && g_ws_copy && g_ds.ortho && std::fabs(g_ds.P[0] - 2.f / 854) < 2e-6f;
     if (g_ws_pass || ws_composite) {
         // full-screen overlays (fades, alarm tints, flashes) cover exactly the old 4:3 area,
-        // which lands on clip x = +-0.75 in the widened pass and on the 16:9 canvas alike:
-        // stretch them to +-1
+        // which lands on view x = +-0.75 in the widened pass and on the 16:9 canvas alike:
+        // stretch them to the whole rendered width (pass) or canvas (composite)
         const float edge = 320.f / kWsW;
         const float cc = g_ws_pass ? vc : 0.f, ck = g_ws_pass ? vk : 1.f;   // composite: clip = view
         bool lo = false, hi = false, only_edges = true;
@@ -1130,24 +1158,38 @@ void gx_draw(uint8_t prim, int vat, uint32_t count, const uint8_t* data, int vsi
             else if (std::fabs(x - edge) < 1e-3f) hi = true;
             else only_edges = false;
         }
+        const float reach = g_ws_pass ? kWsR / kWsW : 1.f;
         if (only_edges && lo && hi)
             for (uint32_t i = 0; i < count; i++) {
                 const float w = verts[i].pos[3];
-                verts[i].pos[0] = (cc + (verts[i].pos[0] / w - cc) / edge) * w;
+                verts[i].pos[0] = (cc + (verts[i].pos[0] / w - cc) / edge * reach) * w;
             }
     }
     if (ws_composite) {
         // the quad showing the playfield copy (stretched to the canvas just above) also reads
         // the wider source region
+        // A 426.67-wide window of the 533.33-wide copy, offset by the pad and the view shift.
+        // The copy is wider than the game's texture (512x256), so it is bound as it is
+        // (bind_texmap) and its texture coordinates are rescaled from the game's size to it.
         int nstages = ((g_gx.bp[0x00] >> 10) & 15) + 1;
-        bool uses_copy = false;
-        for (int s = 0; s < nstages; s++) {
+        unsigned done = 0;
+        auto cp = g_copies.find(g_ws_copy);
+        for (int s = 0; s < nstages && cp != g_copies.end(); s++) {
             uint32_t order = g_gx.bp[0x28 + s / 2] >> ((s & 1) * 12);
-            if (((order >> 6) & 1) && texmap_addr(order & 7) == g_ws_copy) uses_copy = true;
+            const int m = order & 7, t = (order >> 3) & 7;
+            if (!((order >> 6) & 1) || texmap_addr(m) != g_ws_copy || (done >> t & 1)) continue;
+            done |= 1u << t;
+            const uint32_t img0 = g_gx.bp[(m < 4 ? 0x80 + m : 0xA0 + (m - 4)) + 8];
+            const float gw = (float)((img0 & 1023) + 1), gh = (float)(((img0 >> 10) & 1023) + 1);
+            const float cw = (float)cp->second.w, ch = (float)cp->second.h;
+            float t0 = verts[0].tc[t][0];
+            for (uint32_t i = 1; i < count; i++) t0 = std::min(t0, verts[i].tc[t][0]);
+            const float left = t0 * gw + kWsPad + g_ws_view * kWsW / 2;   // window's left texel
+            for (uint32_t i = 0; i < count; i++) {
+                verts[i].tc[t][0] = (left + (verts[i].tc[t][0] - t0) * gw * (kWsW / 320.f)) / cw;
+                verts[i].tc[t][1] = verts[i].tc[t][1] * gh / ch;
+            }
         }
-        if (uses_copy)
-            for (uint32_t i = 0; i < count; i++)
-                for (int t = 0; t < 8; t++) verts[i].tc[t][0] *= kWsW / 320.f;
     }
     bool tris = prim == 0x80 || prim == 0x90 || prim == 0x98 || prim == 0xA0;
     if (!tris) {

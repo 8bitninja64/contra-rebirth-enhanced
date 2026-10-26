@@ -6,6 +6,5 @@ VIWaitForRetrace        # frame_stats
 fn_80013F00             # skip_strap_screen (boot sequence state machine)
 fn_800DFC30             # widescreen: view rectangle getter (l,t,r,b) used by layer culling
 fn_80111A70             # widescreen: tile layer draw (per-layer extents, background stretch)
-fn_800FA260             # widescreen: 2DCameraLocator draw (camera shift at map edges)
 fn_8000C420             # cheat_stage: scene manager creates the next engine (member pointer at +0x4F8)
 fn_8000A9B0             # widescreen: engine "is on screen" test (pos, margin) used by enemies to start acting
