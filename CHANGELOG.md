@@ -25,6 +25,10 @@
   composite, plus widened view rectangle for tile culling. Enemies and item carriers spawn at
   the 16:9 edge (object-layer spawn region and the engines' on-screen test count the 16:9
   width); a backmost layer that only covers 4:3 (Stage 2 sky and vortex) is stretched to 16:9.
+- Widescreen map edges: the playfield is rendered 53 units wider on each side and the
+  presented 16:9 window slides toward the level art where the map ends (Stage 1 boss room,
+  Stage 5 start), with spawns and the on-screen test following it; the game's camera is not
+  touched. 4:3-only rooms (Stage 4 skull room, shaft) fill their sides from the edge columns.
 - F1 menu rebuilt on Dear ImGui in the style of the TenchuZ / Blitz ports: Display, Graphics,
   Audio (volume, mute), Controls (key rebinding), Gameplay, Cheats, About; pauses the game.
 - Level select cheat (`cheat_stage` + `start_stage`): a new game starts at the chosen stage.

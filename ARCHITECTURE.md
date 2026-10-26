@@ -154,6 +154,9 @@ On/Off row in the F1 menu automatically.
 
 Render pipeline in gameplay: playfield pass (viewport 320×240, ortho 2/320) → EFB copy 320×240
 to a texture → composite pass (640×480 viewport; ortho 854 wide in 16:9 mode, 640 in 4:3).
+With true widescreen the playfield pass is 533.33 wide (16:9 plus a 53.33 pad each side), the
+copy (534×240) is larger than the game's 512×256 texture and is bound as is, and the composite
+samples a 426.67-wide window of it, offset by `g_ws_view` at map edges (`gx_render.cpp`).
 
 ## 12. Debug tools (`runtime/debug_tools.cpp`, environment variables)
 
