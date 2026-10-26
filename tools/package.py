@@ -9,7 +9,7 @@ usage: python tools/package.py [--zip] [--out dist-release] [--bin <runtime buil
   ContraReBirthEnhancedXD-windows-x64.zip / ContraReBirthEnhancedXD-linux-x64.tar.xz
 
 Downloads (cached in src/build-deps/package, each checked against its pinned SHA-256):
-Zig 0.17.0 (ziglang.org), Python 3.12.10 embeddable (python.org, Windows) and pip (PyPI).
+Zig 0.17.0 (ziglang.org), Python 3.12.10 embeddable (python.org, Windows) and pip (PyPI, both).
 ZIG_DIR=<unpacked zig> uses a local copy instead of downloading Zig.
 """
 import hashlib, os, shutil, subprocess, sys, tarfile, time, urllib.request, zipfile
@@ -81,7 +81,7 @@ def zig_tree():
 def put_zig(dest):
     """Zig trimmed to the one target the module is built for (x86_64 Windows/MinGW or Linux/glibc)."""
     keep_libc = {'mingw'} if WIN else {'glibc'}
-    keep_inc = {'any-windows-any'} if WIN else {'any-linux-any', 'generic-glibc', 'x86_64-linux-gnu', 'x86-linux-any', 'x86_64-linux-any'}
+    keep_inc = {'any-windows-any'} if WIN else {'any-linux-any', 'generic-glibc', 'x86-linux-gnu', 'x86-linux-any', 'x86_64-linux-gnu', 'x86_64-linux-any'}
 
     def ignore(d, names):
         rel = os.path.relpath(d, src).replace('\\', '/')
@@ -127,7 +127,8 @@ def main():
             for zi in z.infolist():   # keep the archive's time stamps: the updater skips unchanged files by them
                 t = time.mktime(zi.date_time + (0, 0, -1))
                 os.utime(os.path.join(pydir, zi.filename), (t, t))
-        put(os.path.join('tools', os.path.basename(PIP[0])), fetch(*PIP))
+    # pip for the first start's 'pip install libWiiPy': the embeddable Python has none, nor has SteamOS
+    put(os.path.join('tools', os.path.basename(PIP[0])), fetch(*PIP))
     # the build-inputs stamp, from the package's own files (make_module.py --stamp in its layout)
     stamp = subprocess.run([sys.executable, '-I', os.path.join(pkg, 'tools', 'make_module.py'), '--stamp'],
                            capture_output=True, text=True, check=True).stdout.strip()

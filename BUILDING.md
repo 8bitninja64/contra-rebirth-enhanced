@@ -52,3 +52,28 @@ ninja -C build-linux -j4
 
 Without `-DUSE_SDL=ON` you get the headless EGL test build from upstream (screenshots via
 `SHOT_EVERY`/`SHOT_DIR`, stops after `TIMEOUT` seconds, default 15).
+
+## Releases (no game code)
+
+The recompiled game code builds as its own library, `contrarebirth_game.dll` / `.so`
+(`src/runtime/module_abi.h`), so a release ships the runtime alone. On first start the runtime
+(`src/runtime/first_start.cpp`) runs `tools/make_module.py` on the player's WAD: libWiiPy from PyPI,
+the WAD unpacked into the user directory, `recomp.py`, then the bundled Zig compiles the module.
+
+```sh
+python tools/package.py --zip                       # Windows: dist-release/ContraReBirthEnhancedXD-windows-x64.zip
+python3 tools/package.py --zip --bin src/build-linux  # Linux: ...-linux-x64.tar.xz
+```
+
+`package.py` downloads Zig 0.17.0, the embeddable Python 3.12.10 (Windows) and pip, each pinned by
+SHA-256 (`ZIG_DIR=<unpacked zig>` uses a local Zig), trims Zig to the one target, writes
+`tools/build_inputs.stamp` (when it changes, the next start rebuilds the module) and
+`tools/files.sha256` (the updater installs only changed files), and refuses any game-derived file.
+
+Publishing: push a tag `vX.Y` (or run the Release workflow by hand). `.github/workflows/release.yml`
+builds both runtimes with `CONTRA_VERSION` = the tag, packages them and attaches the archives to
+the GitHub release; GitHub's asset digests are what the in-game updater checks.
+
+Test switches: `CONTRA_USER_DIR` (user directory), `CONTRA_FIRST_START_WAD` (first start picks
+this WAD), `CONTRA_MODULE` (module path), `CONTRA_UPDATE_API=http://127.0.0.1:PORT` (fake GitHub),
+`CONTRA_UPDATE_AUTOINSTALL=1`, `START_ENGINE=1A..5C` (with `cheat_stage`).

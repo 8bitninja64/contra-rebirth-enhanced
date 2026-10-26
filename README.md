@@ -2,6 +2,20 @@
 
 Native PC port of Contra ReBirth (WiiWare), enhanced. Based on the native recompilation below.
 
+## Playing
+
+1. Download `ContraReBirthEnhancedXD-windows-x64.zip` (Windows 10 1903 or newer) or
+   `ContraReBirthEnhancedXD-linux-x64.tar.xz` from the
+   [releases](https://github.com/8bitninja64/contra-rebirth-enhanced/releases) and unpack it anywhere.
+2. Start `contrarebirth.exe` (Linux: `contrarebirth`). The first start asks for your own WAD of
+   Contra ReBirth (WiiWare, USA) and builds the game code from it on your computer: a few minutes,
+   once, with a progress screen. It needs the internet once, for the WAD tool libWiiPy.
+   The game, its code and your saves go to `%APPDATA%\Contra ReBirth Enhanced XD` (Linux:
+   `~/.local/share/Contra ReBirth Enhanced XD`).
+3. F1 (or Back+Start on a pad) opens the menu. **F1 > Update** installs new releases in place.
+
+**No game data or game code is in the releases**: everything comes from your WAD.
+
 ## Contra ReBirth - native recompilation
 
 A static recompilation of **Contra ReBirth** (WiiWare, NTSC-U, title `WKTE`) to native code. The

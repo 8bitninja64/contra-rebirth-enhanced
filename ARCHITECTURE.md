@@ -135,6 +135,22 @@ add `runtime/enhancements/<id>.cpp` modeled on `frame_stats.cpp`. Per-frame work
 `enh_on_frame()` (the manager owns the `VIWaitForRetrace` hook). Every enhancement gets an
 On/Off row in the F1 menu automatically.
 
+## 10b. Game module, first start and updates
+
+- `src/gen` (generated from the player's `main.dol`) builds as `contrarebirth_game.dll/.so`. Its one
+  export, `contra_module_init()`, receives the runtime helpers the code calls (`RuntimeApi`:
+  memory-mapped I/O, CPU helpers, dispatch, interrupts, HLE functions by name) and returns the
+  function table, hook slots and the DOL's SHA-1 (`GameModule`). Plain C types only: the release
+  builds the module with Zig on the player's machine while the runtime is built with MinGW gcc.
+  `runtime/module_rt.cpp` is the module side, `module_loader.cpp` the runtime side,
+  `hle_registry.cpp` (from `hle.txt` via CMake) maps HLE names to runtime functions.
+- First start (`first_start.cpp`): when the game folder or module is missing, or the module's
+  stamp differs from `tools/build_inputs.stamp`, a small SDL/ImGui window asks for the WAD and runs
+  `tools/make_module.py`, then restarts. Game, module and NAND live in the user directory.
+- Updates (`update_check.cpp`, F1 > Update): GitHub's latest release, SHA-256-checked download,
+  only changed files unpacked (by `tools/files.sha256`) and swapped with `.old-update` backups,
+  restart. The executable has a UTF-8 code page manifest (`app.manifest`) for non-ASCII paths.
+
 ## 11. Known game structures (found with the debug tools)
 
 | Address / path | Meaning |

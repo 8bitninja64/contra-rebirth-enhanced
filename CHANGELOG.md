@@ -1,6 +1,11 @@
 # Changelog
 
 ## Unreleased (develop)
+- Releases without game code: the recompiled game is a separate module, built from the player's
+  own WAD on first start (progress screen; ~2.5 min) with a bundled Zig and Python. Game data,
+  module and saves live in the user directory. `tools/package.py`, Release workflow.
+- F1 > Update: installs new GitHub releases in place (SHA-256 checked, only changed files,
+  restart); optional check at start with a corner notice.
 - Renamed to **Contra ReBirth Enhanced XD** (window title, F1 menu, About, exe properties).
 - Enhancement `skip_konami_logo` (on by default): start-up goes straight to the opening
   cinematic, without the strap screen or the Konami logo.

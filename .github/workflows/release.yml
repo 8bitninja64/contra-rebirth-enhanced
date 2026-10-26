@@ -1,0 +1,88 @@
+# Release: builds the runtime for Windows and Linux (no game code: src/gen is never in the
+# repository, so the game module target is skipped) and publishes the archives tools/package.py
+# makes to a GitHub release. GitHub computes each asset's SHA-256 digest, which the in-game
+# updater (src/runtime/update_check.cpp) requires before it installs anything.
+# Trigger: push a version tag (git tag v0.3 && git push origin v0.3), or run it by hand with a tag.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build and publish (e.g. v0.3)
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc mingw-w64-x86_64-SDL2 mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-cmake mingw-w64-x86_64-python
+      - name: Build the runtime
+        run: |
+          python tools/fetch_imgui.py
+          cmake -S src -B src/build-win -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_COMPILER=g++ \
+                -DCMAKE_RC_COMPILER=windres -DSDL2_DIR="$(cygpath -m /mingw64)" -DCONTRA_VERSION="$TAG"
+          ninja -C src/build-win contrarebirth
+      - name: Package
+        run: python -I tools/package.py --zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist-release/ContraReBirthEnhancedXD-windows-x64.zip
+
+  linux:
+    # Ubuntu 22.04 (glibc 2.35): the runtime then also starts on older distributions and SteamOS.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y g++ cmake ninja-build libsdl2-dev libgl-dev python3
+      - name: Build the runtime
+        run: |
+          python3 tools/fetch_imgui.py
+          cmake -S src -B src/build-linux -G Ninja -DUSE_SDL=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCONTRA_VERSION="$TAG"
+          ninja -C src/build-linux contrarebirth
+      - name: Package
+        run: python3 -I tools/package.py --zip --bin src/build-linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist-release/ContraReBirthEnhancedXD-linux-x64.tar.xz
+
+  publish:
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes=$(awk '/^## /{n++} n==1' CHANGELOG.md | tail -n +2)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" artifacts/* --clobber
+          else
+            gh release create "$TAG" artifacts/* --title "Contra ReBirth Enhanced XD $TAG" --notes "$notes"
+          fi

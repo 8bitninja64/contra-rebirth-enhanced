@@ -60,6 +60,12 @@ Done: Dear ImGui menu (Display, Graphics, Audio, Controls, Gameplay, Cheats, Abo
 game, pad and keyboard navigation, key rebinding; persisted in `contrarebirth.ini`. Todo: verify
 pad rebinding and the Linux build of the menu.
 
+## Phase 8b — releases and updates (done, first tag pending)
+Game module split, first-start build from the player's WAD (Windows verified from an unzipped
+release in a non-ASCII path; Linux under WSLg), `tools/package.py`, `.github/workflows/release.yml`,
+in-game updater (verified v0.3 -> v0.4 against a fake API; bad digest refused). Todo: push the
+first tag, check the CI run and the real GitHub update path, Steam Deck test.
+
 ## Phase 8 — quality and releases
 GitHub Actions build check (runtime only — the generated code needs the user's DOL, so CI
 compiles the runtime against a stub table), release layouts that contain no game data, release
