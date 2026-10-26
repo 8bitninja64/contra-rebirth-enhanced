@@ -1,6 +1,12 @@
 # Changelog
 
 ## Unreleased (develop)
+- Renamed to **Contra ReBirth Enhanced XD** (window title, F1 menu, About, exe properties).
+- Enhancement `skip_konami_logo` (on by default): start-up goes straight to the opening
+  cinematic, without the strap screen or the Konami logo.
+- 16:9 shelved for now: Aspect ratio 16:9 and True widescreen are hidden from the F1 menu and
+  the game stays 4:3 (`kOfferWidescreen` in `config.h`; all of the code stays). New scaling
+  mode "Stretch to 16:9" (`scaling = stretch169`) stretches the 4:3 picture to a 16:9 area.
 - Forked from darkuni/contra-rebirth-recomp v0.2 (`9e2763f`).
 - Windows: native build with MSYS2 MinGW-w64 instead of a Linux cross-compiler; `tools/build.ps1`.
 - Linux: the windowed SDL build no longer exits after 15 s (the headless test timer now applies

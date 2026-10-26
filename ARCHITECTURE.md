@@ -1,6 +1,6 @@
 # Architecture
 
-How Contra ReBirth Enhanced runs, verified against the source at upstream commit `9e2763f`
+How Contra ReBirth Enhanced XD runs, verified against the source at upstream commit `9e2763f`
 (darkuni/contra-rebirth-recomp v0.2). Line references are to that tree.
 
 ## 1. Pipeline overview

@@ -3,6 +3,8 @@
 // were read from the instruction that loads the variable in the named SDK function.
 #pragma once
 #define GAME_NAME        "Contra ReBirth"
+#define PORT_NAME        "Contra ReBirth Enhanced XD"   // this port (window title, menu, About)
+#define PORT_NAME_UPPER  "CONTRA REBIRTH ENHANCED XD"
 #define GAME_EXE         "contrarebirth"
 #define GAME_INI         "contrarebirth.ini"
 

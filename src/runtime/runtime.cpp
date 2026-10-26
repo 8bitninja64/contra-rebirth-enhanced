@@ -40,7 +40,7 @@ static void reserve_guest() {
 #ifdef _WIN32
     void* p = VirtualAlloc(MEM, 0x100000000ull, MEM_RESERVE, PAGE_NOACCESS);
     if (p != MEM) {
-        MessageBoxA(nullptr, "Could not reserve the emulated Wii memory (4 GB of address space at a fixed location).", GAME_NAME, MB_ICONERROR);
+        MessageBoxA(nullptr, "Could not reserve the emulated Wii memory (4 GB of address space at a fixed location).", PORT_NAME, MB_ICONERROR);
         exit(1);
     }
 #else
@@ -412,7 +412,7 @@ int main(int argc, char** argv) {
 #ifdef _WIN32
             MessageBoxA(nullptr, "Game data not found.\n\nPut the 'game' folder (made by prepare_wad from your WAD) next to "
                                  GAME_EXE ".exe, or start it as:\n  " GAME_EXE ".exe <path to game folder>",
-                        GAME_NAME, MB_ICONERROR);
+                        PORT_NAME, MB_ICONERROR);
 #endif
             return 1;
         }

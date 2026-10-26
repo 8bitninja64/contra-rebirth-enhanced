@@ -1,6 +1,6 @@
 # Development plan
 
-Contra ReBirth Enhanced is a fork of [darkuni/contra-rebirth-recomp](https://github.com/darkuni/contra-rebirth-recomp)
+Contra ReBirth Enhanced XD is a fork of [darkuni/contra-rebirth-recomp](https://github.com/darkuni/contra-rebirth-recomp)
 (MIT). Goal: a polished native Windows and SteamOS/Linux release that keeps the original gameplay
 and adds modern display options and a maintainable enhancement layer.
 

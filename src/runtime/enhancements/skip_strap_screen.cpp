@@ -25,8 +25,20 @@ static bool slot_is(uint32_t a, const char* s) {
     return true;
 }
 
+// skip_konami_logo: the sequence ends in state 6 once the logo has faded out, by setting the
+// fade value (this+0x70) to its end constant and this+0x08 = 2 (finished), after which the
+// game moves on to the opening cinematic. Doing that as soon as state 2 would start the first
+// motion leaves out the strap screen and the Konami logo alike.
+static bool g_skip_logo = false;
+static const uint32_t kFadeEnd = 0x802E8BA0u - 0x7F2Cu;   // r2-0x7F2C, the f32 state 6 stores at the end
+
 static void hook_boot_sequence(Ctx* c, GuestFn orig) {
     const uint32_t self = c->r[3];
+    if (g_skip_logo && R32(self + 0x74) == 2) {
+        WF32(self + 0x70, RF32(kFadeEnd));
+        W32(self + 0x08, 2);
+        return;
+    }
     const uint32_t state = g_active ? R32(self + 0x74) : 0xFFFFFFFFu;
     if (state == 2 && slot_is(kKonamiSlot, "konami_logo")) {
         uint8_t saved[3][12];
@@ -50,9 +62,13 @@ static void hook_boot_sequence(Ctx* c, GuestFn orig) {
 
 static bool init() {
     if (!slot_is(kStrapSlots[0], "strap_en") || !slot_is(kKonamiSlot, "konami_logo")) return false;   // not the expected data
-    return enh_hook("fn_80013F00", hook_boot_sequence);
+    return enh_hook("fn_80013F00", hook_boot_sequence);   // shared by both; a second install is harmless
 }
 
 static const Enhancement skip_strap_screen = {
     "skip_strap_screen", "Skip strap screen", "Go straight to the Konami logo at start-up", true, init, &g_active};
 REGISTER_ENHANCEMENT(skip_strap_screen);
+static const Enhancement skip_konami_logo = {
+    "skip_konami_logo", "Skip Konami logo", "Start with the opening cinematic (no strap screen, no Konami logo)", true,
+    init, &g_skip_logo};
+REGISTER_ENHANCEMENT(skip_konami_logo);

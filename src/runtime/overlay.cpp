@@ -292,6 +292,7 @@ bool draw_gameplay() {
         help("Fast-forward. Hold Tab (keyboard) or click the right stick for a burst.");
     }
     enh_checkbox("skip_strap_screen", "Skip the wrist-strap screen");
+    enh_checkbox("skip_konami_logo", "Skip the Konami logo (start with the opening cinematic)");
     enh_checkbox("frame_stats", "Frame statistics in the log (diagnostics)");
     return changed;
 }
@@ -327,7 +328,7 @@ bool draw_cheats() {
 }
 
 void draw_about() {
-    ImGui::TextUnformatted(GAME_NAME " Enhanced - native PC port of the WiiWare game (WKTE)");
+    ImGui::TextUnformatted(PORT_NAME " - native PC port of the WiiWare game (WKTE)");
     ImGui::TextDisabled("Static recompilation by darkuni; enhancements: github.com/8bitninja64/contra-rebirth-enhanced");
     ImGui::Spacing();
     ImGui::TextWrapped("Contra ReBirth is (c) Konami. This program contains no Konami code or data: it runs your own copy of the game.");
@@ -368,7 +369,7 @@ void draw_menu() {
     dl->AddRectFilled(ImVec2(o.x, o.y + stripe), ImVec2(o.x + size.x, o.y + stripe * 1.6f), ImGui::GetColorU32(kSteel));
     ImGui::Dummy(ImVec2(0, stripe));
     ImGui::PushFont(g_title);
-    ImGui::TextColored(ImVec4(1, 1, 1, 1), "CONTRA REBIRTH ENHANCED");
+    ImGui::TextColored(ImVec4(1, 1, 1, 1), PORT_NAME_UPPER);
     ImGui::PopFont();
     ImGui::SameLine();
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + ImGui::GetTextLineHeight() * 0.35f);

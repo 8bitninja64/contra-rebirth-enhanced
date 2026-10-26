@@ -1,4 +1,8 @@
-# Contra ReBirth - native recompilation
+# Contra ReBirth Enhanced XD
+
+Native PC port of Contra ReBirth (WiiWare), enhanced. Based on the native recompilation below.
+
+## Contra ReBirth - native recompilation
 
 A static recompilation of **Contra ReBirth** (WiiWare, NTSC-U, title `WKTE`) to native code. The
 game's PowerPC executable is translated to C++ and runs on Windows (and Linux) with a small runtime

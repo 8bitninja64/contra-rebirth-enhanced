@@ -7,8 +7,8 @@ BEGIN
   BEGIN
     BLOCK "040904B0"
     BEGIN
-      VALUE "FileDescription", "Contra ReBirth (native port)"
-      VALUE "ProductName", "Contra ReBirth native port"
+      VALUE "FileDescription", "Contra ReBirth Enhanced XD"
+      VALUE "ProductName", "Contra ReBirth Enhanced XD"
       VALUE "FileVersion", "0.2"
       VALUE "ProductVersion", "0.2"
       VALUE "OriginalFilename", "contrarebirth.exe"

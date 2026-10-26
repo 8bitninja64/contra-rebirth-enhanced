@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  One-command Windows build of Contra ReBirth Enhanced.
+  One-command Windows build of Contra ReBirth Enhanced XD.
 
 .DESCRIPTION
   1. (optional) unpacks your WAD into .\game with tools\prepare_wad.py

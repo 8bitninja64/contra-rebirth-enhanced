@@ -79,7 +79,7 @@ void config_save() {
     FILE* w = fopen(g_ini_path.c_str(), "w");
     if (!w) return;
     fprintf(w,
-        "; " GAME_NAME " native port settings (also editable in-game: F1 or Esc, or Start+Back on a controller)\n\n"
+        "; " PORT_NAME " settings (also editable in-game: F1 or Esc, or Start+Back on a controller)\n\n"
         "; Internal rendering resolution: 1 = original 640x528, 2 = 1280x1056, 3 = 1920x1584, 4 = 2560x2112\n"
         "resolution_scale = %d\n"
         "; Present 16:9 (the game is told the TV is widescreen). 0 = original 4:3\n"
