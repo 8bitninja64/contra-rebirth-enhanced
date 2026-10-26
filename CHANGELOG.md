@@ -28,7 +28,11 @@
 - Widescreen map edges: the playfield is rendered 53 units wider on each side and the
   presented 16:9 window slides toward the level art where the map ends (Stage 1 boss room,
   Stage 5 start), with spawns and the on-screen test following it; the game's camera is not
-  touched. 4:3-only rooms (Stage 4 skull room, shaft) fill their sides from the edge columns.
+  touched. Only an edge that holds still slides the picture. 4:3-only rooms (vertical Stage 4)
+  keep black side bars; backgrounds that end inside the view while scrolling (Stage 2 elevator
+  skyline) are continued with a copy of themselves; the Stage 3 truck sky (one screen-fixed
+  picture repeated side by side) is stretched instead of repeated.
+- Test switch `START_ENGINE=1A..5C` (with `cheat_stage`): start at any stage half.
 - F1 menu rebuilt on Dear ImGui in the style of the TenchuZ / Blitz ports: Display, Graphics,
   Audio (volume, mute), Controls (key rebinding), Gameplay, Cheats, About; pauses the game.
 - Level select cheat (`cheat_stage` + `start_stage`): a new game starts at the chosen stage.

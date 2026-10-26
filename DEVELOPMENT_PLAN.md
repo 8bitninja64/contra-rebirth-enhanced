@@ -39,7 +39,8 @@ Order (each step verified before the next):
    - 16:10 / 21:9 only make sense after step 2; the game's picture is 4:3 or pillarboxed 16:9.
 2. True widescreen: done (enhancement `widescreen`; renderer widens the 320×240 playfield pass,
    copy and composite; tile culling, spawn region and on-screen test widened; 4:3 background
-   stretch). Checked on Stages 1–5, including map edges (view clamp) and 4:3-only rooms (edge fill).
+   stretch). Checked on Stages 1–5, including map edges (view clamp), 4:3-only rooms (black bars), the
+   Stage 2 elevator ride (played by the owner, recorded) and the Stage 3 sky.
    Todo: bosses of Stages 2–5 by hand, then decide whether it becomes the default.
 3. Frame pacing: done to 59.6 game frames/s (see KNOWN_ISSUES). >60 fps would need
    interpolation of the game's own movement; out of scope.
