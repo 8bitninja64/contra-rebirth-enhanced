@@ -16,6 +16,8 @@
 #include "enhancements.h"
 #include "hle.h"
 #include "config.h"
+#include <cstdlib>
+#include <cstring>
 
 static const uint32_t kGameState = 0x802E0138u;
 
@@ -79,11 +81,23 @@ REGISTER_ENHANCEMENT(cheat_homing);
 static bool g_stage_active = false;
 static const uint32_t kStageCreators[5] = {0x8000F080u /*1A*/, 0x8000F6F0u /*2A*/, 0x8000FD60u /*3A*/,
                                            0x80010080u /*4A*/, 0x80010A40u /*5A*/};
+// Test switch START_ENGINE=1A..5C: start at any stage half instead.
+static uint32_t env_engine() {
+    static const struct { const char* id; uint32_t fn; } kEngines[] = {
+        {"1A", 0x8000F080u}, {"1B", 0x8000F3D0u}, {"2A", 0x8000F6F0u}, {"2B", 0x8000FA40u}, {"3A", 0x8000FD60u},
+        {"4A", 0x80010080u}, {"4B", 0x800103D0u}, {"4C", 0x80010720u}, {"5A", 0x80010A40u}, {"5B", 0x80010D90u},
+        {"5C", 0x80011110u}};
+    if (const char* e = getenv("START_ENGINE"))
+        for (auto& k : kEngines) if (!strcmp(e, k.id)) return k.fn;
+    return 0;
+}
 static void hook_scene_create(Ctx* c, GuestFn orig) {
     const uint32_t mgr = c->r[3];
-    if (g_stage_active && g_cfg.start_stage > 1 && R32(mgr + 0x4FC) == 0xFFFFFFFFu && R32(mgr + 0x500) == kStageCreators[0]) {
-        W32(mgr + 0x500, kStageCreators[g_cfg.start_stage - 1]);
-        fprintf(g_log, "[cheat] stage select: starting at stage %d\n", g_cfg.start_stage);
+    static const uint32_t engine = env_engine();
+    const uint32_t want = engine ? engine : g_cfg.start_stage > 1 ? kStageCreators[g_cfg.start_stage - 1] : 0;
+    if (g_stage_active && want && R32(mgr + 0x4FC) == 0xFFFFFFFFu && R32(mgr + 0x500) == kStageCreators[0]) {
+        W32(mgr + 0x500, want);
+        fprintf(g_log, "[cheat] stage select: starting engine %08X\n", want);
     }
     orig(c);
 }
