@@ -22,6 +22,7 @@ static void set(const std::string& k, const std::string& v) {
     else if (k == "scaling") g_cfg.scaling = v == "integer" || v == "stretch" || v == "stretch169" ? v : "fit";
     else if (k == "volume") g_cfg.volume = std::max(0, std::min(100, atoi(v.c_str())));
     else if (k == "mute") g_cfg.mute = b();
+    else if (k == "update_check") g_cfg.update_check = b();
     else if (k.compare(0, 4, "key_") == 0 && k.size() > 4) g_cfg.keys[k.substr(4)] = v;
     else if (k == "start_stage") g_cfg.start_stage = std::max(1, std::min(5, atoi(v.c_str())));
     else if (k == "filter") g_cfg.filter = v == "sharp" || v == "nearest" ? v : "smooth";
@@ -63,7 +64,7 @@ void config_load(const char* exe_path) {
     }
     const char* keys[] = {"resolution_scale", "vsync", "widescreen", "fullscreen", "window_scale", "controls", "show_perf",
                           "anisotropy", "smooth_textures", "msaa", "speed", "swap_ab_xy",
-                          "fullscreen_mode", "resolution", "scaling", "filter", "start_stage"};
+                          "fullscreen_mode", "resolution", "scaling", "filter", "start_stage", "update_check"};
     for (const char* k : keys) {
         std::string env = k;
         std::transform(env.begin(), env.end(), env.begin(), ::toupper);
@@ -120,6 +121,7 @@ void config_save() {
         g_cfg.resolution.c_str(), g_cfg.window_scale, g_cfg.scaling.c_str(), g_cfg.filter.c_str(),
         g_cfg.controls.c_str(), g_cfg.swap_ab_xy, g_cfg.show_perf, g_cfg.anisotropy, g_cfg.smooth_textures, g_cfg.msaa, g_cfg.speed);
     fprintf(w, "; Master volume 0-100, mute\nvolume = %d\nmute = %d\n", g_cfg.volume, g_cfg.mute);
+    fprintf(w, "; Ask GitHub for a newer release at start (F1 > Update installs it on request)\nupdate_check = %d\n", g_cfg.update_check);
     if (!g_cfg.keys.empty()) fprintf(w, "\n; Keyboard bindings (SDL key names; F1 > Controls)\n");
     for (auto& [id, key] : g_cfg.keys) fprintf(w, "key_%s = %s\n", id.c_str(), key.c_str());
     fprintf(w, "\n; Stage a new game starts at when the stage select cheat (enh_cheat_stage) is on: 1-5\n"

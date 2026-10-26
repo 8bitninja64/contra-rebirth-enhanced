@@ -19,6 +19,7 @@
 #include "config.h"
 #include "hostinput.h"
 #include "overlay.h"
+#include "update_check.h"
 #include "audio_ring.h"
 #include <atomic>
 #include <thread>
@@ -343,6 +344,7 @@ static void apply_actions() {
     const uint32_t a = overlay_take_actions();
     if (a & OV_ACT_DISPLAY) apply_display();
     if (a & OV_ACT_QUIT) exit(0);
+    if (a & OV_ACT_RESTART) { update::restart(); exit(0); }   // after an installed update
 }
 
 bool gl_platform_poll() { return true; }   // events are pumped on the UI thread

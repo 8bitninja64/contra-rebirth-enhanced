@@ -2,6 +2,7 @@
 #include "ppc.h"
 #include "module_loader.h"
 #include "first_start.h"
+#include "update_check.h"
 #include "hle.h"
 #include "game.h"
 #include "gx_state.h"
@@ -14,6 +15,7 @@
 #include <string>
 #include <csignal>
 #include <algorithm>
+#include <thread>
 #ifdef _WIN32
 #include <windows.h>
 #include <mmsystem.h>
@@ -406,6 +408,8 @@ int main(int argc, char** argv) {
     }
     T0 = std::chrono::steady_clock::now();
     config_load(exe.c_str());
+    update::cleanup();   // files the last installed update replaced
+    fprintf(LOG, "[version] %s\n", update::version());
     std::string module_error;
     const bool have_module = have_game && module_load(module_error);   // the recompiled game code (module_abi.h)
 #if defined(_WIN32) || defined(USE_SDL)
@@ -470,6 +474,24 @@ int main(int argc, char** argv) {
 #endif
     threads_init_main(&ctx);
     extern void devices_start(); devices_start();
+    // releases ask GitHub for a newer one in the background (F1 > Update installs it on request)
+    if (g_cfg.update_check && (module_is_release() || getenv("CONTRA_UPDATE_API"))) update::check_start();
+    if (getenv("CONTRA_UPDATE_AUTOINSTALL"))   // tests: install whatever the check finds, then restart
+        std::thread([] {
+            for (int i = 0; i < 600; i++) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                const update::Release r = update::check_status();
+                if (r.state == update::Release::Checking) continue;
+                if (r.state != update::Release::Available) return;
+                update::install_start(r);
+                while (true) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    const update::Install in = update::install_status();
+                    if (in.state == update::Install::Failed) return;
+                    if (in.state == update::Install::Done) { fflush(LOG); update::restart(); _exit(0); }
+                }
+            }
+        }).detach();
     fprintf(LOG, "entry %08X\n", entry);
     dispatch(&ctx, entry);
     fprintf(LOG, "__start returned\n");

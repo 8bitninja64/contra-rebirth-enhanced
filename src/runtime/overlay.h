@@ -16,7 +16,7 @@ void overlay_pad(uint32_t held);          // OV_PAD_* bits of all controllers, s
 enum : uint32_t { OV_PAD_UP = 1, OV_PAD_DOWN = 2, OV_PAD_LEFT = 4, OV_PAD_RIGHT = 8, OV_PAD_A = 16, OV_PAD_B = 32,
                   OV_PAD_LB = 64, OV_PAD_RB = 128, OV_PAD_START = 256, OV_PAD_BACK = 512 };
 // Actions the UI thread carries out for the menu (window changes must happen there).
-enum : uint32_t { OV_ACT_DISPLAY = 1, OV_ACT_QUIT = 2 };
+enum : uint32_t { OV_ACT_DISPLAY = 1, OV_ACT_QUIT = 2, OV_ACT_RESTART = 4 };
 uint32_t overlay_take_actions();
 
 // Present thread, GL context current

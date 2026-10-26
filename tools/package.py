@@ -12,7 +12,7 @@ Downloads (cached in src/build-deps/package, each checked against its pinned SHA
 Zig 0.17.0 (ziglang.org), Python 3.12.10 embeddable (python.org, Windows) and pip (PyPI).
 ZIG_DIR=<unpacked zig> uses a local copy instead of downloading Zig.
 """
-import hashlib, os, shutil, subprocess, sys, tarfile, urllib.request, zipfile
+import hashlib, os, shutil, subprocess, sys, tarfile, time, urllib.request, zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NAME = 'ContraReBirthEnhancedXD'
@@ -121,12 +121,26 @@ def main():
         put(rel, os.path.join(ROOT, src))
     put_zig(os.path.join(pkg, 'tools', 'zig'))
     if WIN:
-        zipfile.ZipFile(fetch(*PYTHON)).extractall(os.path.join(pkg, 'tools', 'python'))
+        pydir = os.path.join(pkg, 'tools', 'python')
+        with zipfile.ZipFile(fetch(*PYTHON)) as z:
+            z.extractall(pydir)
+            for zi in z.infolist():   # keep the archive's time stamps: the updater skips unchanged files by them
+                t = time.mktime(zi.date_time + (0, 0, -1))
+                os.utime(os.path.join(pydir, zi.filename), (t, t))
         put(os.path.join('tools', os.path.basename(PIP[0])), fetch(*PIP))
     # the build-inputs stamp, from the package's own files (make_module.py --stamp in its layout)
     stamp = subprocess.run([sys.executable, '-I', os.path.join(pkg, 'tools', 'make_module.py'), '--stamp'],
                            capture_output=True, text=True, check=True).stdout.strip()
     open(os.path.join(pkg, 'tools', 'build_inputs.stamp'), 'w').write(stamp + '\n')
+    # Every file's SHA-256 and size: the updater (update_check.cpp) unpacks only what changed.
+    rows = []
+    for d, _, names in os.walk(pkg):
+        for n in names:
+            p = os.path.join(d, n)
+            rel = os.path.relpath(p, pkg).replace('\\', '/')
+            if rel != 'tools/files.sha256':
+                rows.append(f'{hashlib.sha256(open(p, "rb").read()).hexdigest()} {os.path.getsize(p)} {rel}')
+    open(os.path.join(pkg, 'tools', 'files.sha256'), 'w', newline='\n').write('\n'.join(sorted(rows, key=lambda r: r.split(' ', 2)[2])) + '\n')
 
     # Nothing translated from the game, nor game data, may be in the package.
     bad = []

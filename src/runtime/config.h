@@ -22,6 +22,7 @@ struct Config {
     std::string filter = "smooth";     // "smooth" (bilinear / box), "sharp" (sharp bilinear), "nearest"
     std::string controls = "sideways"; // "sideways", "nunchuk" or "classic" (Classic Controller)
     bool show_perf = true;
+    bool update_check = true;          // ask GitHub for a newer release at start (F1 > Update)
     int anisotropy = 16;               // anisotropic texture filtering: 1 (off), 2, 4, 8, 16
     bool smooth_textures = true;       // trilinear mipmaps (generated when the game has none)
     bool swap_ab_xy = false;           // gamepad: swap A<->B and X<->Y (Nintendo-style positions)

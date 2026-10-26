@@ -11,6 +11,7 @@
 #include "overlay.h"
 #include "config.h"
 #include "enhancements.h"
+#include "update_check.h"
 #include "imgui.h"
 #include "backends/imgui_impl_sdl2.h"
 #include "backends/imgui_impl_opengl3.h"
@@ -36,8 +37,8 @@ std::atomic<int> g_capture{-1};          // key binding waiting for a key (-1 no
 bool g_init = false;
 uint32_t g_pad_prev = 0, g_pad_pressed = 0;
 
-enum Section { kDisplay, kGraphics, kAudio, kControls, kGameplay, kCheats, kAbout, kSectionCount };
-const char* kSectionNames[kSectionCount] = {"Display", "Graphics", "Audio", "Controls", "Gameplay", "Cheats", "About"};
+enum Section { kDisplay, kGraphics, kAudio, kControls, kGameplay, kCheats, kUpdate, kAbout, kSectionCount };
+const char* kSectionNames[kSectionCount] = {"Display", "Graphics", "Audio", "Controls", "Gameplay", "Cheats", "Update", "About"};
 int g_section = 0;
 enum class Focus { None, Sections, Content };
 Focus g_focus = Focus::Sections;
@@ -327,6 +328,64 @@ bool draw_cheats() {
     return changed;
 }
 
+// Update: GitHub releases (update_check.h). A new release is downloaded, checked and installed
+// in place on request; then Restart now.
+bool draw_update() {
+    bool changed = false;
+    focus_first_option();
+    ImGui::Text("This version: %s", update::version());
+    const update::Release r = update::check_status();
+    const update::Install in = update::install_status();
+    using R = update::Release;
+    using I = update::Install;
+    const bool busy = r.state == R::Checking || (in.state != I::Idle && in.state != I::Failed && in.state != I::Done);
+    if (in.state == I::Done) {
+        ImGui::TextColored(kGreen, "%s is installed.", r.latest.c_str());
+        help("Restart to use it. If the new version changed the game code, it is built again first (a few minutes).");
+        if (ImGui::Button("Restart now")) g_actions |= OV_ACT_RESTART;
+        return changed;
+    }
+    ImGui::BeginDisabled(busy);
+    if (ImGui::Button(r.state == R::Checking ? "Checking..." : "Check for updates")) update::check_start();
+    ImGui::EndDisabled();
+    switch (r.state) {
+        case R::Idle: help("Asks GitHub for the newest release of " PORT_NAME "."); break;
+        case R::Checking: break;
+        case R::UpToDate: ImGui::TextColored(kGreen, "You have the newest version (%s).", r.latest.c_str()); break;
+        case R::NoReleases: ImGui::TextDisabled("No releases have been published yet."); break;
+        case R::Failed: ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.40f, 1), "Could not check: %s", r.error.c_str()); break;
+        case R::Available: {
+            ImGui::TextColored(kGold, "%s is available.", r.latest.c_str());
+            std::string why;
+            const bool can = update::can_install(r, why);
+            if (in.state == I::Downloading || in.state == I::Verifying || in.state == I::Extracting || in.state == I::Installing) {
+                const char* what = in.state == I::Downloading ? "Downloading" : in.state == I::Verifying ? "Checking the download"
+                                 : in.state == I::Extracting ? "Unpacking" : "Installing";
+                ImGui::TextUnformatted(what);
+                ImGui::ProgressBar(in.state == I::Downloading ? in.fraction : 1.0f, ImVec2(-1, 0));
+            } else if (can) {
+                if (ImGui::Button("Download and install")) update::install_start(r);
+                if (in.state == I::Failed) ImGui::TextColored(ImVec4(0.95f, 0.45f, 0.40f, 1), "The update failed: %s", in.error.c_str());
+            } else {
+                ImGui::TextDisabled("Can't install here: %s.", why.c_str());
+            }
+            if (ImGui::Button("Open the release page")) update::open_page(r.page);
+            if (!r.notes.empty()) {
+                ImGui::Spacing();
+                ImGui::TextDisabled("Release notes");
+                ImGui::BeginChild("##notes", ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 7), true);
+                ImGui::TextWrapped("%s", r.notes.c_str());
+                ImGui::EndChild();
+            }
+            break;
+        }
+    }
+    ImGui::Spacing();
+    changed |= ImGui::Checkbox("Check for updates at start", &g_cfg.update_check);
+    help("One request to GitHub when the game starts; nothing is installed without asking.");
+    return changed;
+}
+
 void draw_about() {
     ImGui::TextUnformatted(PORT_NAME " - native PC port of the WiiWare game (WKTE)");
     ImGui::TextDisabled("Static recompilation by darkuni; enhancements: github.com/8bitninja64/contra-rebirth-enhanced");
@@ -406,6 +465,7 @@ void draw_menu() {
         case kControls: changed |= draw_controls(); break;
         case kGameplay: changed |= draw_gameplay(); break;
         case kCheats: changed |= draw_cheats(); break;
+        case kUpdate: changed |= draw_update(); break;
         case kAbout: draw_about(); break;
     }
     ImGui::PopItemWidth();
@@ -444,6 +504,28 @@ void draw_fps() {
     const ImGuiWindowFlags f = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
                                ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs;
     if (ImGui::Begin("##fps", nullptr, f)) ImGui::TextUnformatted(g_perf_text);
+    ImGui::End();
+}
+
+// A few seconds of "update available" in the corner when the start-up check finds a release.
+bool update_toast_due() {
+    static double shown_at = -1;
+    static bool done = false;
+    if (done || g_open) return false;
+    if (update::check_status().state != update::Release::Available) return false;
+    const double now = ImGui::GetTime();
+    if (shown_at < 0) shown_at = now;
+    if (now - shown_at > 8) { done = true; return false; }
+    return true;
+}
+void draw_update_toast() {
+    const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    ImGui::SetNextWindowPos(ImVec2(ds.x - 8, ds.y - 8), ImGuiCond_Always, ImVec2(1, 1));
+    ImGui::SetNextWindowBgAlpha(0.75f);
+    const ImGuiWindowFlags f = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                               ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs;
+    if (ImGui::Begin("##update", nullptr, f))
+        ImGui::TextColored(kGold, "%s is available: F1 > Update", update::check_status().latest.c_str());
     ImGui::End();
 }
 }  // namespace
@@ -499,7 +581,8 @@ void overlay_draw(SDL_Window* win, void* gl_context, int ww, int wh) {
             set_open(true);
         }
     }
-    if (!g_open && !(g_cfg.show_perf && g_perf_text[0])) return;
+    static bool toast_pending = true;   // the toast needs the ImGui clock: draw until it has run its time
+    if (!g_open && !(g_cfg.show_perf && g_perf_text[0]) && !(toast_pending && update::check_status().state == update::Release::Available)) return;
     std::lock_guard<std::recursive_mutex> lk(g_mx);
     if (!g_init) {
         IMGUI_CHECKVERSION();
@@ -523,6 +606,7 @@ void overlay_draw(SDL_Window* win, void* gl_context, int ww, int wh) {
     if (g_open) feed_navigation(); else g_pad_pressed = 0;
     ImGui::NewFrame();
     if (g_cfg.show_perf && g_perf_text[0]) draw_fps();
+    if (update_toast_due()) draw_update_toast(); else if (ImGui::GetTime() > 10) toast_pending = false;
     if (g_open) draw_menu();
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
