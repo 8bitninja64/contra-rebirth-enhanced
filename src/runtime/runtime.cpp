@@ -1,7 +1,6 @@
 // Host runtime for the recompiled main.dol
 #include "ppc.h"
-#include "table.h"
-#include "funcs.h"
+#include "module_loader.h"
 #include "hle.h"
 #include "game.h"
 #include "gx_state.h"
@@ -237,20 +236,20 @@ void unimpl(Ctx* c, uint32_t pc, const char* what) {
 
 // ---------------------------------------------------------------- dispatch / trace
 static const FnEntry* find_fn(uint32_t a) {
-    unsigned lo = 0, hi = FN_COUNT;
+    unsigned lo = 0, hi = g_fn_count;
     while (lo < hi) {
         unsigned mid = (lo + hi) / 2;
-        if (FN_TABLE[mid].addr < a) lo = mid + 1; else hi = mid;
+        if (g_fn_table[mid].addr < a) lo = mid + 1; else hi = mid;
     }
-    return lo < FN_COUNT && FN_TABLE[lo].addr == a ? &FN_TABLE[lo] : nullptr;
+    return lo < g_fn_count && g_fn_table[lo].addr == a ? &g_fn_table[lo] : nullptr;
 }
 static const FnEntry* containing(uint32_t a) {
-    unsigned lo = 0, hi = FN_COUNT;
+    unsigned lo = 0, hi = g_fn_count;
     while (lo < hi) {
         unsigned mid = (lo + hi) / 2;
-        if (FN_TABLE[mid].addr <= a) lo = mid + 1; else hi = mid;
+        if (g_fn_table[mid].addr <= a) lo = mid + 1; else hi = mid;
     }
-    return lo ? &FN_TABLE[lo - 1] : nullptr;
+    return lo ? &g_fn_table[lo - 1] : nullptr;
 }
 GuestFn lookup(uint32_t t) { auto e = find_fn(t); return e ? e->fn : nullptr; }
 
@@ -420,6 +419,16 @@ int main(int argc, char** argv) {
     const char* root = rootstr.c_str();
     T0 = std::chrono::steady_clock::now();
     config_load(exe.c_str());
+    {   // the recompiled game code (module_abi.h)
+        std::string err;
+        if (!module_load(err)) {
+            fprintf(stderr, "%s\n", err.c_str());
+#ifdef _WIN32
+            MessageBoxA(nullptr, ("The game code could not be loaded:\n\n" + err).c_str(), PORT_NAME, MB_ICONERROR);
+#endif
+            return 1;
+        }
+    }
     reserve_guest();
     if (!title_init(root)) { fprintf(stderr, "no tmd.bin in %s\n", root); return 1; }
     uint32_t entry = load_dol((std::string(root) + "/main.dol").c_str());

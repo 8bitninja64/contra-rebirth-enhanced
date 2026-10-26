@@ -14,5 +14,3 @@
 #define G_OS_EXIT_THREAD        0x8015E5D0u   // OSExitThread
 #define G_SDA_INTERRUPT_TABLE   0x4F70u       // __OSGetInterruptHandler: lwz r4,-0x4F70(r13)
 #define G_SDA_IOS_HEAP          0x54B4u       // __ios_Ipc2: lwz r3,-0x54B4(r13) before iosFree
-#define G_FN_OS_EXIT_THREAD     f_8015E5D0
-#define G_FN_IOS_FREE           f_8018B020

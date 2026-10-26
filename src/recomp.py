@@ -3,7 +3,7 @@
 
 usage: recomp.py main.dol symbols.txt outdir [funcs-per-file]
 """
-import sys, os, collections, io
+import sys, os, collections, io, hashlib
 
 # OS idle loop in SelectThread (spins while no thread is runnable): wait for an interrupt instead
 IDLE_LOOPS = {0x8015E268}   # SelectThread idle spin (Contra ReBirth)
@@ -529,12 +529,34 @@ def main():
         hk.write('  {nullptr, 0, nullptr},\n')
     hk.write(f'}};\nconst unsigned HOOK_COUNT = {len(g.hooks)};\n')
     write_if_changed(f'{outdir}/hooks.cpp', hk.getvalue())
-    write_if_changed(f'{outdir}/hooks_table.h', '#pragma once\n#include "ppc.h"\n'
-                     'struct HookDef { const char* name; uint32_t addr; GuestFn orig; };\n'
+    write_if_changed(f'{outdir}/hooks_table.h', '#pragma once\n#include "ppc.h"\n#include "module_abi.h"\n'
                      'extern const HookDef HOOK_DEFS[]; extern const unsigned HOOK_COUNT;\n')
     with open(f'{outdir}/table.h', 'w') as t:
-        t.write('#pragma once\n#include "ppc.h"\nstruct FnEntry { uint32_t addr, size; GuestFn fn; const char* name; };\n'
+        t.write('#pragma once\n#include "ppc.h"\n#include "module_abi.h"\n'
                 'extern const FnEntry FN_TABLE[]; extern const unsigned FN_COUNT;\n')
+    # the module's entry point (runtime/module_abi.h): table, hook slots, DOL hash, and the HLE
+    # functions the code calls, bridged by name to the runtime's implementations
+    hle_names = sorted(set(g.hle.values()))
+    dol_sha1 = hashlib.sha1(open(dolp, 'rb').read()).hexdigest()
+    m = io.StringIO()
+    m.write('#include "funcs.h"\n#include "table.h"\n#include "hooks_table.h"\n#include <cstring>\n\n')
+    m.write('void module_rt_bind(const RuntimeApi* api);\n')
+    m.write(f'static const char* const HLE_NAMES[] = {{{", ".join(chr(34) + n + chr(34) for n in hle_names) or "nullptr"}}};\n')
+    m.write(f'static GuestFn p_hle[{max(1, len(hle_names))}];\n')
+    for i, nme in enumerate(hle_names):
+        m.write(f'void hle_{nme}(Ctx* c) {{ p_hle[{i}](c); }}\n')
+    m.write('\nCONTRA_MODULE_EXPORT bool contra_module_init(const RuntimeApi* api, GameModule* out) {\n'
+            '    if (!api || !out || api->abi != CONTRA_MODULE_ABI) return false;\n'
+            '    memset(out, 0, sizeof *out);\n'
+            '    out->abi = CONTRA_MODULE_ABI;\n'
+            '    module_rt_bind(api);\n'
+            f'    for (unsigned i = 0; i < {len(hle_names)}u; i++)\n'
+            '        if (!(p_hle[i] = api->hle(HLE_NAMES[i]))) { out->missing_hle = HLE_NAMES[i]; return false; }\n'
+            '    out->table = FN_TABLE; out->count = FN_COUNT;\n'
+            '    out->hooks = HOOK_DEFS; out->hook_count = HOOK_COUNT; out->hook_fn = g_hook_fn;\n'
+            f'    strcpy(out->dol_sha1, "{dol_sha1}");\n'
+            '    return true;\n}\n')
+    write_if_changed(f'{outdir}/module.cpp', m.getvalue())
     n = 0
     for i in range(0, len(funcs), per):
         o = io.StringIO()

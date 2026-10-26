@@ -137,7 +137,12 @@ GuestFn lookup(uint32_t target);
 void trace_call(uint32_t addr);
 void stub_log(uint32_t addr);
 #include <atomic>
+#ifdef CONTRA_MODULE   // the game module (module_abi.h) sees the runtime's flag through a pointer
+extern std::atomic<int>* g_irq_pending_ptr;
+#define g_irq_pending (*g_irq_pending_ptr)
+#else
 extern std::atomic<int> g_irq_pending;
+#endif
 void irq_check(Ctx* c);
 #define IRQCHK(c) do { if (g_irq_pending.load(std::memory_order_relaxed)) irq_check(c); } while (0)
 void idle_wait();   // block briefly until an interrupt is posted

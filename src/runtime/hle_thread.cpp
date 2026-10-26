@@ -99,8 +99,7 @@ static void thread_main(HThread* ht, uint32_t entry) {
     Ctx* c = &ht->ctx;
     dispatch(c, entry);
     // returning from the thread function == OSExitThread(retval)
-    extern void G_FN_OS_EXIT_THREAD(Ctx*);
-    G_FN_OS_EXIT_THREAD(c);
+    dispatch(c, G_OS_EXIT_THREAD);
     fprintf(g_log, "[thread] OSExitThread returned on %08X\n", ht->guest_ctx);
     for (;;) { ht->go = false; while (!ht->go) ht->cv.wait(lk); }
 }

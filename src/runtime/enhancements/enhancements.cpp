@@ -1,5 +1,5 @@
 #include "enhancements.h"
-#include "hooks_table.h"
+#include "module_loader.h"
 #include "config.h"
 #include "hle.h"
 #include <cstdio>
@@ -8,8 +8,6 @@
 #include <cstdint>
 #include <vector>
 #include <string>
-
-extern HookFn g_hook_fn[];
 
 // The DOL this recompilation (symbols, hooks, game.h) was made for.
 static const char* kSupportedDolSha1 = "825fb4ec04335500ca9e172d05b2e593c5ab7dc9";
@@ -24,8 +22,8 @@ const Enhancement* enh_get(int i) { return i >= 0 && i < enh_count() ? slots()[i
 bool enh_compatible() { return g_compatible; }
 
 bool enh_hook(const char* guest_name, HookFn fn) {
-    for (unsigned i = 0; i < HOOK_COUNT; i++)
-        if (HOOK_DEFS[i].name && !strcmp(HOOK_DEFS[i].name, guest_name)) { g_hook_fn[i] = fn; return true; }
+    for (unsigned i = 0; i < g_hook_count; i++)
+        if (g_hook_defs[i].name && !strcmp(g_hook_defs[i].name, guest_name)) { g_hook_slots[i] = fn; return true; }
     fprintf(g_log, "[enh] hook target %s is not in hooks.txt (regenerate src/gen after editing it)\n", guest_name);
     return false;
 }

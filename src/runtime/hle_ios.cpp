@@ -213,7 +213,6 @@ static int32_t ios_exec(uint32_t req) {
     return -4;
 }
 
-extern void G_FN_IOS_FREE(Ctx*);  // iosFree(heap, ptr)
 
 void hle___ios_Ipc2(Ctx* c) {
     uint32_t req = c->r[3], cb = c->r[4];

@@ -68,6 +68,7 @@ try {
 $dist = Join-Path $root 'dist'
 New-Item -ItemType Directory -Force $dist | Out-Null
 Copy-Item (Join-Path $root 'src\build-win\contrarebirth.exe') $dist -Force
+Copy-Item (Join-Path $root 'src\build-win\contrarebirth_game.dll') $dist -Force   # game module, from your main.dol: never redistribute
 Copy-Item (Join-Path $mingw 'bin\SDL2.dll') $dist -Force
 Copy-Item (Join-Path $root 'thirdparty\gamecontrollerdb.txt') $dist -Force   # mappings for pads SDL does not know
 Write-Host "== Done: $dist\contrarebirth.exe"
