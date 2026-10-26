@@ -19,6 +19,7 @@
 #include <vector>
 #include <unordered_map>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <string>
 #include <algorithm>
