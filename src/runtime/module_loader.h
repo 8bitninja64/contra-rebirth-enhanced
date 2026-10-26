@@ -21,5 +21,10 @@ extern std::string g_module_sha1, g_module_path;
 // Looks for the module in CONTRA_MODULE (env), next to the executable, then in the user
 // directory; false with `error` saying why when none loads.
 bool module_load(std::string& error);
+// A release (tools/make_module.py beside the exe) builds its module on the player's machine.
+bool module_is_release();
+// The user directory's module was built by another release (stamp differs from
+// tools/build_inputs.stamp): it must be rebuilt.
+bool module_user_outdated();
 std::filesystem::path module_exe_dir();
 std::filesystem::path module_user_dir();   // %APPDATA% / XDG data dir, "Contra ReBirth Enhanced XD"

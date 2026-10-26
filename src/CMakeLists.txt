@@ -26,6 +26,9 @@ configure_file(${CMAKE_CURRENT_BINARY_DIR}/hle_registry.inc.tmp ${CMAKE_CURRENT_
 # ---------------------------------------------------------------- runtime (no game code)
 file(GLOB RT_SRC runtime/*.cpp runtime/enhancements/*.cpp)
 list(REMOVE_ITEM RT_SRC ${CMAKE_CURRENT_SOURCE_DIR}/runtime/module_rt.cpp)
+if(NOT (WIN32 OR USE_SDL))   # the first-start screen needs the SDL window build
+  list(REMOVE_ITEM RT_SRC ${CMAKE_CURRENT_SOURCE_DIR}/runtime/first_start.cpp)
+endif()
 add_executable(contrarebirth ${RT_SRC})
 target_include_directories(contrarebirth PRIVATE runtime runtime/enhancements ${CMAKE_CURRENT_BINARY_DIR})
 # Dear ImGui for the F1 menu (windowed builds), fetched by tools/fetch_imgui.py
@@ -47,7 +50,7 @@ if(WIN32)
   target_compile_options(contrarebirth PRIVATE -O2 -fno-strict-aliasing -w -g0)
   target_link_directories(contrarebirth PRIVATE ${SDL2_DIR}/lib)
   target_sources(contrarebirth PRIVATE runtime/app.rc)
-  target_link_libraries(contrarebirth PRIVATE SDL2 winmm -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic)
+  target_link_libraries(contrarebirth PRIVATE SDL2 winmm comdlg32 -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic)
 elseif(USE_SDL)
   target_compile_definitions(contrarebirth PRIVATE USE_SDL)
   target_include_directories(contrarebirth PRIVATE /usr/include/SDL2)

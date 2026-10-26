@@ -75,11 +75,35 @@ static bool try_load(const fs::path& p, std::string& error) {
     return true;
 }
 
+static std::string read_first_line(const fs::path& p) {
+    FILE* f = fopen(p.u8string().c_str(), "rb");
+    if (!f) return {};
+    char buf[256] = {};
+    if (!fgets(buf, sizeof buf, f)) buf[0] = 0;
+    fclose(f);
+    std::string s = buf;
+    while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) s.pop_back();
+    return s;
+}
+
+bool module_is_release() {
+    std::error_code ec;
+    return fs::exists(module_exe_dir() / "tools" / "make_module.py", ec);
+}
+
+bool module_user_outdated() {
+    if (!module_is_release()) return false;   // development builds have no stamp
+    const std::string want = read_first_line(module_exe_dir() / "tools" / "build_inputs.stamp");
+    const std::string have = read_first_line(module_user_dir() / "contrarebirth_game.stamp");
+    return want.empty() || have != want;
+}
+
 bool module_load(std::string& error) {
     std::vector<fs::path> where;
     if (const char* e = getenv("CONTRA_MODULE")) where.push_back(fs::u8path(e));
     where.push_back(module_exe_dir() / CONTRA_MODULE_FILE);
-    where.push_back(module_user_dir() / CONTRA_MODULE_FILE);
+    // a module built for another release's recompiler/tables is rebuilt, not loaded
+    if (!module_user_outdated()) where.push_back(module_user_dir() / CONTRA_MODULE_FILE);
     for (const fs::path& p : where) {
         std::string err;
         if (try_load(p, err)) { fprintf(g_log, "[module] %s (main.dol sha1 %s)\n", g_module_path.c_str(), g_module_sha1.c_str()); return true; }
@@ -90,6 +114,7 @@ bool module_load(std::string& error) {
 }
 
 fs::path module_user_dir() {
+    if (const char* t = getenv("CONTRA_USER_DIR"); t && *t) return fs::u8path(t);   // tests
 #ifdef _WIN32
     const char* base = getenv("APPDATA");
     fs::path p = base ? fs::u8path(base) : module_exe_dir();

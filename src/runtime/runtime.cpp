@@ -1,6 +1,7 @@
 // Host runtime for the recompiled main.dol
 #include "ppc.h"
 #include "module_loader.h"
+#include "first_start.h"
 #include "hle.h"
 #include "game.h"
 #include "gx_state.h"
@@ -392,43 +393,50 @@ int main(int argc, char** argv) {
     // main.dol, tmd.bin, ticket.bin and content/<index>.app (see tools/prepare_wad.py)
     std::string exe = exe_path(argv[0]);
     std::string exedir = exe.substr(0, exe.find_last_of("/\\") + 1);
+    // (a release unpacks the WAD into the user directory on first start: first_start.cpp)
     std::string rootstr;
-    if (argc > 1) rootstr = argv[1];
+    bool have_game = false;
+    if (argc > 1) { rootstr = argv[1]; have_game = true; }
     else {
-        const char* cands[] = {"game", "../game", "../../game", "../../../game"};
-        rootstr = exedir + "game";
-        bool found = false;
-        for (const std::string& base : {exedir, std::string()}) {
-            for (const char* cnd : cands) {
-                std::string t = base + cnd + "/tmd.bin";
-                if (FILE* f = fopen(t.c_str(), "rb")) { fclose(f); rootstr = base + cnd; found = true; break; }
-            }
-            if (found) break;
-        }
-        if (!found) {
-            fprintf(stderr, "Game data not found. Run tools/prepare_wad.py on your WAD to make a 'game' folder\n"
-                            "next to " GAME_EXE ", or run: " GAME_EXE " <path to game folder>\n");
-#ifdef _WIN32
-            MessageBoxA(nullptr, "Game data not found.\n\nPut the 'game' folder (made by prepare_wad from your WAD) next to "
-                                 GAME_EXE ".exe, or start it as:\n  " GAME_EXE ".exe <path to game folder>",
-                        PORT_NAME, MB_ICONERROR);
-#endif
-            return 1;
-        }
+        std::vector<std::string> cands;
+        for (const char* cnd : {"game", "../game", "../../game", "../../../game"}) { cands.push_back(exedir + cnd); cands.push_back(cnd); }
+        cands.push_back((module_user_dir() / "game").u8string());
+        for (const std::string& c : cands)
+            if (FILE* f = fopen((c + "/tmd.bin").c_str(), "rb")) { fclose(f); rootstr = c; have_game = true; break; }
     }
-    const char* root = rootstr.c_str();
     T0 = std::chrono::steady_clock::now();
     config_load(exe.c_str());
-    {   // the recompiled game code (module_abi.h)
-        std::string err;
-        if (!module_load(err)) {
-            fprintf(stderr, "%s\n", err.c_str());
-#ifdef _WIN32
-            MessageBoxA(nullptr, ("The game code could not be loaded:\n\n" + err).c_str(), PORT_NAME, MB_ICONERROR);
-#endif
-            return 1;
-        }
+    std::string module_error;
+    const bool have_module = have_game && module_load(module_error);   // the recompiled game code (module_abi.h)
+#if defined(_WIN32) || defined(USE_SDL)
+    if ((!have_game || !have_module) && (module_is_release() || getenv("CONTRA_FIRST_START"))) {
+        std::error_code ec;
+        const bool rebuild = have_game && module_user_outdated() && std::filesystem::exists(module_user_dir() / "game" / "main.dol", ec);
+        const std::string reason = !have_game ? "First start: the game is made from your own WAD"
+                                 : rebuild    ? "This version changed the game code: it is built again"
+                                              : "The game code is built from your WAD";
+        if (first_start_run(reason, rebuild)) first_start_restart(argc, argv);
+        return 0;
     }
+#endif
+    if (!have_game) {
+        fprintf(stderr, "Game data not found. Run tools/prepare_wad.py on your WAD to make a 'game' folder\n"
+                        "next to " GAME_EXE ", or run: " GAME_EXE " <path to game folder>\n");
+#ifdef _WIN32
+        MessageBoxA(nullptr, "Game data not found.\n\nPut the 'game' folder (made by prepare_wad from your WAD) next to "
+                             GAME_EXE ".exe, or start it as:\n  " GAME_EXE ".exe <path to game folder>",
+                    PORT_NAME, MB_ICONERROR);
+#endif
+        return 1;
+    }
+    if (!have_module) {
+        fprintf(stderr, "%s\n", module_error.c_str());
+#ifdef _WIN32
+        MessageBoxA(nullptr, ("The game code could not be loaded:\n\n" + module_error).c_str(), PORT_NAME, MB_ICONERROR);
+#endif
+        return 1;
+    }
+    const char* root = rootstr.c_str();
     reserve_guest();
     if (!title_init(root)) { fprintf(stderr, "no tmd.bin in %s\n", root); return 1; }
     uint32_t entry = load_dol((std::string(root) + "/main.dol").c_str());

@@ -448,6 +448,8 @@ void draw_fps() {
 }
 }  // namespace
 
+void overlay_apply_theme() { load_fonts(); apply_style(); }
+ImFont* overlay_title_font() { return g_title; }
 bool overlay_open() { return g_open; }
 void overlay_toggle() { set_open(!g_open); }
 bool overlay_pauses_game() { return g_open; }

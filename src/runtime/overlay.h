@@ -22,6 +22,11 @@ uint32_t overlay_take_actions();
 // Present thread, GL context current
 void overlay_draw(SDL_Window* win, void* gl_context, int ww, int wh);
 
+// The menu's fonts and colours for the current ImGui context (first_start.cpp's screen).
+void overlay_apply_theme();
+struct ImFont;
+ImFont* overlay_title_font();
+
 // For the controls page (gl_platform_sdl.cpp owns the bindings)
 struct KeyBinding { const char* id; const char* label; uint32_t bit; const char* default_key; };
 const KeyBinding* key_bindings(int* count);

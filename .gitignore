@@ -31,3 +31,4 @@ __pycache__/
 *.ini
 *.ppm
 .DS_Store
+/dist-release/
